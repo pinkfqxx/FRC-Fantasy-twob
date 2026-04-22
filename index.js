@@ -172,6 +172,12 @@ function getCurrentPlayer(data) {
   return (round % 2 === 0) ? data.draftOrder[index] : data.draftOrder[n - 1 - index];
 }
 
+// ---------------- GLOBAL ERROR SAFETY ----------------
+// Prevent a single bad interaction from crashing the entire bot process
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection (bot kept alive):', err);
+});
+
 // ---------------- READY ----------------
 client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -288,15 +294,18 @@ client.on('interactionCreate', async (interaction) => {
       const team = interaction.options.getInteger('team');
       const current = getCurrentPlayer(data);
 
-      if (userId !== current) return interaction.reply("⛔ It's not your turn.");
+      // Validate synchronously before deferring so errors are fast
+      if (userId !== current) return interaction.reply({ content: "⛔ It's not your turn.", ephemeral: true });
 
       const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
-
-      if (!pool.includes(team)) return interaction.reply(`⛔ Team ${team} is not in the pool.`);
+      if (!pool.includes(team)) return interaction.reply({ content: `⛔ Team ${team} is not in the pool.`, ephemeral: true });
 
       for (const picks of Object.values(data.teamsDrafted)) {
-        if (picks.includes(team)) return interaction.reply(`⛔ Team ${team} has already been drafted.`);
+        if (picks.includes(team)) return interaction.reply({ content: `⛔ Team ${team} has already been drafted.`, ephemeral: true });
       }
+
+      // Defer now — getTeamName is a network call that can exceed 3s
+      await interaction.deferReply();
 
       data.teamsDrafted[current].push(team);
       data.currentPick++;
@@ -307,12 +316,12 @@ client.on('interactionCreate', async (interaction) => {
       if (data.currentPick >= maxPicks) {
         data.phase = "finished";
         saveData(data);
-        return interaction.reply(`🏁 **Draft complete!**\n✅ <@${userId}> picked **${name}**\n\nRun \`/standings\` to see the final results!`);
+        return interaction.editReply(`🏁 **Draft complete!**\n✅ <@${userId}> picked **${name}**\n\nRun \`/standings\` to see the final results!`);
       }
 
       const next = getCurrentPlayer(data);
       saveData(data);
-      return interaction.reply(`✅ <@${userId}> picked **${name}**\n\n👉 Next pick: <@${next}>`);
+      return interaction.editReply(`✅ <@${userId}> picked **${name}**\n\n👉 Next pick: <@${next}>`);
     }
 
     // ── STANDINGS ─────────────────────────────────────────────────
