@@ -314,7 +314,7 @@ client.on('interactionCreate', async (interaction) => {
       const maxPicks = data.players.length * 6;
 
       if (data.currentPick >= maxPicks) {
-        data.phase = "finished";
+        data.phase = data.phase === "worlds" ? "worlds_finished" : "finished";
         saveData(data);
         return interaction.editReply(`🏁 **Draft complete!**\n✅ <@${userId}> picked **${name}**\n\nRun \`/standings\` to see the final results!`);
       }
@@ -331,7 +331,8 @@ client.on('interactionCreate', async (interaction) => {
       if (data.players.length === 0) return interaction.editReply("No players in the draft yet.");
       if (data.phase === "none") return interaction.editReply("The draft hasn't started yet.");
 
-      const isWorlds = data.phase === "worlds" || data.phase === "finished";
+      // "worlds" or "worlds_finished" = worlds scoring; everything else = season scoring
+      const isWorlds = data.phase === "worlds" || data.phase === "worlds_finished";
       const scoreFn = isWorlds ? getTeamWorldsScore : getTeamSeasonScore;
       const phaseLabel = isWorlds ? "Worlds" : "Season";
 
