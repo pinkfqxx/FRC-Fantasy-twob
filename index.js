@@ -584,10 +584,8 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'breakdown') {
       await interaction.deferReply();
-      const raw = interaction.options.getString('player').trim();
-      const isAll = raw.toUpperCase() === 'ALL';
-      const target = isAll ? 'ALL' : raw.replace(/[<@!>]/g, '');
-      const playerIds = isAll ? data.players : data.players.filter(p => p === target);
+      const target = interaction.options.getString('player').trim();
+      const playerIds = target === 'ALL' ? data.players : data.players.filter(p => p === target);
 
       if (!playerIds.length) return interaction.editReply("No matching fantasy player found.");
 

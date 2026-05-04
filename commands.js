@@ -31,7 +31,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('breakdown')
     .setDescription('Show a full breakdown for one fantasy team or all fantasy teams')
-    .addStringOption(opt => opt.setName('player').setDescription('Discord user ID or mention, or ALL').setRequired(true)),
+    .addStringOption(opt => {
+      const option = opt.setName('player').setDescription('Pick a fantasy player or ALL').setRequired(true);
+      option.addChoices({ name: 'ALL', value: 'ALL' });
+      return option;
+    }),
   new SlashCommandBuilder().setName('teams').setDescription('Show all fantasy teams and their owners'),
   new SlashCommandBuilder()
     .setName('team')
