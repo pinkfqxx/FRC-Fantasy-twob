@@ -224,6 +224,30 @@ function findOwner(data, team) {
   return null;
 }
 
+async function buildTeamBreakdown(teamNumber, scoreFn) {
+  const teamName = await getTeamName(teamNumber);
+  const score = await scoreFn(teamNumber);
+  return `**FRC ${teamNumber} — ${teamName}**\nTotal: **${score} pts**`;
+}
+
+async function buildFantasyBreakdown(data, scoreFn, player) {
+  const players = player === 'ALL' ? data.players : data.players.filter(p => p === player);
+  const blocks = [];
+
+  for (const p of players) {
+    const teams = data.teamsDrafted[p] || [];
+    const teamParts = await Promise.all(teams.map(async team => {
+      const score = await scoreFn(team);
+      const name = await getTeamName(team);
+      return `- FRC ${team} — ${name}: **${score} pts**`;
+    }));
+    const total = teams.length ? (await Promise.all(teams.map(scoreFn))).reduce((a, b) => a + b, 0) : 0;
+    blocks.push(`**${playerDisplay(p)}**\nTotal: **${total} pts**\n${teamParts.join('\n') || 'No teams drafted yet.'}`);
+  }
+
+  return blocks.join('\n\n');
+}
+
 // ---------------- CPU AUTO-PICK ----------------
 // Called recursively until a human's turn or draft ends
 async function doBotPick(data, guildId, channel) {
@@ -556,6 +580,31 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.editReply({ embeds: [
         new EmbedBuilder().setTitle(`📋 Score Breakdown`).setDescription(desc).setColor(0x00AE86)
       ]});
+    }
+
+    if (interaction.commandName === 'breakdown') {
+      await interaction.deferReply();
+      const raw = interaction.options.getString('player').trim();
+      const isAll = raw.toUpperCase() === 'ALL';
+      const target = isAll ? 'ALL' : raw.replace(/[<@!>]/g, '');
+      const playerIds = isAll ? data.players : data.players.filter(p => p === target);
+
+      if (!playerIds.length) return interaction.editReply("No matching fantasy player found.");
+
+      const scoreFn = data.phase === "worlds" || data.phase === "worlds_finished" ? getTeamWorldsScore : getTeamSeasonScore;
+      const blocks = await Promise.all(playerIds.map(async player => {
+        const teams = data.teamsDrafted[player] || [];
+        const teamLines = await Promise.all(teams.map(async team => {
+          const pts = await scoreFn(team);
+          return `- FRC ${team}: **${pts} pts**`;
+        }));
+        const total = (await Promise.all(teams.map(scoreFn))).reduce((a, b) => a + b, 0);
+        return `**${playerDisplay(player)}**\nTotal: **${total} pts**\n${teamLines.join('\n') || 'No teams drafted yet.'}`;
+      }));
+
+      return interaction.editReply({
+        embeds: [new EmbedBuilder().setTitle("Fantasy Team Breakdown").setDescription(blocks.join('\n\n')).setColor(0x00AE86)]
+      });
     }
 
     // ── SHOW ALL FANTASY TEAMS ────────────────────────────────────

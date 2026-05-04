@@ -28,6 +28,10 @@ const commands = [
     .setName('score')
     .setDescription('Show a full point breakdown for any FRC team')
     .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('breakdown')
+    .setDescription('Show a full breakdown for one fantasy team or all fantasy teams')
+    .addStringOption(opt => opt.setName('player').setDescription('Discord user ID or mention, or ALL').setRequired(true)),
   new SlashCommandBuilder().setName('teams').setDescription('Show all fantasy teams and their owners'),
   new SlashCommandBuilder()
     .setName('team')
