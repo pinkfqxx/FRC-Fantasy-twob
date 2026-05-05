@@ -318,11 +318,12 @@ client.on('interactionCreate', async (interaction) => {
       if (setToOpen) {
         data.draftOpen = true;
         saveData(data, guildId);
-        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: fullCommands });
+        // Guild commands update instantly (vs global = up to 1 hour)
+        await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId), { body: fullCommands });
         return interaction.reply("✅ **Draft is now OPEN**\nPlayers can now join using `/join_draft` or add a CPU with `/addbot`");
       } else {
         saveData(freshData(), guildId);
-        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: closedCommands });
+        await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId), { body: closedCommands });
         return interaction.reply("🛑 **Draft has been CLOSED and RESET**");
       }
     }
