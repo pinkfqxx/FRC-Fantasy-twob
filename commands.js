@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
-const commands = [
+const fullCommands = [
   new SlashCommandBuilder().setName('join_draft').setDescription('Join the fantasy draft'),
   new SlashCommandBuilder().setName('addbot').setDescription('Add a CPU player to the draft that auto-picks randomly'),
   new SlashCommandBuilder().setName('start_draft').setDescription('Start the season draft'),
@@ -59,23 +59,14 @@ const commands = [
     ),
 ];
 
-const baseCommands = [
-  'draftstatus',
-  'join_draft',
-  'addbot',
-  'start_draft',
-  'start_worlds_draft',
-  'pick',
-  'standings',
-  'trade',
-  'accepttrade',
-  'declinetrade',
-  'score',
-  'breakdown',
-  'teams',
-  'team',
-  'team_identify',
-  'reset_draft'
+const closedCommands = [
+  new SlashCommandBuilder().setName('draftstatus').setDescription('Open or close + reset the draft'),
+  new SlashCommandBuilder().setName('standings').setDescription('Show live fantasy standings with real scores from TBA'),
+  new SlashCommandBuilder()
+    .setName('score')
+    .setDescription('Show a full point breakdown for any FRC team')
+    .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true)),
+  new SlashCommandBuilder().setName('teams').setDescription('Show all fantasy teams and their owners'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -83,12 +74,11 @@ const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 (async () => {
   try {
     console.log('Registering global slash commands...');
-    await rest.put(
-      Routes.applicationCommands(process.env.CLIENT_ID),
-      { body: commands }
-    );
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: fullCommands });
     console.log('✅ All commands registered globally! (may take up to 1 hour to appear in servers)');
   } catch (error) {
     console.error('Error:', error);
   }
 })();
+
+module.exports = { fullCommands, closedCommands };
