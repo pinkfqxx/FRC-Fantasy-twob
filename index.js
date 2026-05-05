@@ -315,9 +315,18 @@ client.on('interactionCreate', async (interaction) => {
       if (setToOpen) {
         data.draftOpen = true;
         saveData(data, guildId);
+        const { REST, Routes } = require('discord.js');
+        const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+        const commands = require('./commands.js').commands || require('./commands.js');
+        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
         return interaction.reply("✅ **Draft is now OPEN**\nPlayers can now join using `/join_draft` or add a CPU with `/addbot`");
       } else {
         saveData(freshData(), guildId);
+        const { REST, Routes } = require('discord.js');
+        const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+        const commands = require('./commands.js').commands || require('./commands.js');
+        const closed = commands.filter(cmd => ['draftstatus', 'standings', 'score', 'teams'].includes(cmd.name));
+        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: closed });
         return interaction.reply("🛑 **Draft has been CLOSED and RESET**");
       }
     }

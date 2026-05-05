@@ -59,6 +59,25 @@ const commands = [
     ),
 ];
 
+const baseCommands = [
+  'draftstatus',
+  'join_draft',
+  'addbot',
+  'start_draft',
+  'start_worlds_draft',
+  'pick',
+  'standings',
+  'trade',
+  'accepttrade',
+  'declinetrade',
+  'score',
+  'breakdown',
+  'teams',
+  'team',
+  'team_identify',
+  'reset_draft'
+];
+
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
 (async () => {
