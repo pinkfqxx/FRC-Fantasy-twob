@@ -62,6 +62,7 @@ async function safeFetch(url, options = {}) {
 }
 
 const TBA = { headers: { 'X-TBA-Auth-Key': process.env.TBA_KEY } };
+const CURRENT_YEAR = new Date().getFullYear();
 
 function erf(x) {
   const sign = x < 0 ? -1 : 1;
@@ -96,7 +97,7 @@ async function loadSeasonTeams() {
   const allTeams = [];
   let page = 0;
   while (true) {
-    const teams = await safeFetch(`https://www.thebluealliance.com/api/v3/teams/2026/${page}`, TBA);
+    const teams = await safeFetch(`https://www.thebluealliance.com/api/v3/teams/${CURRENT_YEAR}/${page}`, TBA);
     if (!teams || teams.length === 0) break;
     allTeams.push(...teams.map(t => t.team_number));
     page++;
@@ -107,7 +108,7 @@ async function loadSeasonTeams() {
 
 async function loadWorldsTeams() {
   const [events, allTeams] = await Promise.all([
-    safeFetch('https://www.thebluealliance.com/api/v3/events/2026', TBA),
+    safeFetch(`https://www.thebluealliance.com/api/v3/events/${CURRENT_YEAR}`, TBA),
     loadSeasonTeams()
   ]);
   const worlds = (events || [])
@@ -130,7 +131,7 @@ function playerDisplay(id) {
 
 // ---------------- SCORING ----------------
 async function getTeamSeasonScore(teamNumber) {
-  const events = await safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/2026`, TBA);
+  const events = await safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/${CURRENT_YEAR}`, TBA);
   if (!events?.length) return 0;
 
   const regularEvents = events
@@ -151,7 +152,7 @@ async function getTeamSeasonScore(teamNumber) {
 }
 
 async function getTeamWorldsScore(teamNumber) {
-  const events = await safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/2026`, TBA);
+  const events = await safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/${CURRENT_YEAR}`, TBA);
   if (!events?.length) return 0;
 
   const worldsEvents = events.filter(e => e.event_type === 3 || e.event_type === 4);
@@ -536,6 +537,11 @@ client.on('interactionCreate', async (interaction) => {
       ]});
     }
 
+    // ── CURRENT YEAR ──────────────────────────────────────────────
+    if (interaction.commandName === 'currentyear') {
+      return interaction.reply(`📅 The bot is currently using **${CURRENT_YEAR}** as the FRC season year.\nAll team lists, events, and scores are pulled from the ${CURRENT_YEAR} TBA database.`);
+    }
+
     // ── SCORE BREAKDOWN ───────────────────────────────────────────
     if (interaction.commandName === 'score') {
       await interaction.deferReply();
@@ -543,17 +549,17 @@ client.on('interactionCreate', async (interaction) => {
 
       const [teamName, events] = await Promise.all([
         getTeamName(teamNumber),
-        safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/2026`, TBA)
+        safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/${CURRENT_YEAR}`, TBA)
       ]);
 
-      if (!events?.length) return interaction.editReply(`No 2026 events found for FRC ${teamNumber}.`);
+      if (!events?.length) return interaction.editReply(`No ${CURRENT_YEAR} events found for FRC ${teamNumber}.`);
 
       const regularEvents = events
         .filter(e => e.event_type === 0 || e.event_type === 1)
         .sort((a, b) => new Date(a.start_date) - new Date(b.start_date))
         .slice(0, 2);
 
-      if (!regularEvents.length) return interaction.editReply(`No regular season events found for **${teamName}** in 2026.`);
+      if (!regularEvents.length) return interaction.editReply(`No regular season events found for **${teamName}** in ${CURRENT_YEAR}.`);
 
       const dpResults = await Promise.all(
         regularEvents.map(ev => safeFetch(`https://www.thebluealliance.com/api/v3/event/${ev.key}/district_points`, TBA))

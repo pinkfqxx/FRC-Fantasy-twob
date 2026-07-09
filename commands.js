@@ -2,6 +2,7 @@ require('dotenv').config();
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const fullCommands = [
+  new SlashCommandBuilder().setName('currentyear').setDescription('Show the current year the bot is using for TBA data'),
   new SlashCommandBuilder().setName('join_draft').setDescription('Join the fantasy draft'),
   new SlashCommandBuilder().setName('addbot').setDescription('Add a CPU player to the draft that auto-picks randomly'),
   new SlashCommandBuilder().setName('start_draft').setDescription('Start the season draft'),
@@ -67,6 +68,7 @@ const closedCommands = [
     .setDescription('Show a full point breakdown for any FRC team')
     .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true)),
   new SlashCommandBuilder().setName('teams').setDescription('Show all fantasy teams and their owners'),
+  new SlashCommandBuilder().setName('currentyear').setDescription('Show the current year the bot is using for TBA data'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
