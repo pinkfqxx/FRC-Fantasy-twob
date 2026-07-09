@@ -3,6 +3,11 @@ const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const fullCommands = [
   new SlashCommandBuilder().setName('currentyear').setDescription('Show the current year the bot is using for TBA data'),
+  new SlashCommandBuilder()
+    .setName('undraft')
+    .setDescription('Undo the last pick or remove a specific team (host only)')
+    .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number to undraft (omit to undo last pick)').setRequired(false)),
+  new SlashCommandBuilder().setName('podium').setDescription('Show each player\'s personal top 3 teams with medals and draft position'),
   new SlashCommandBuilder().setName('join_draft').setDescription('Join the fantasy draft'),
   new SlashCommandBuilder().setName('addbot').setDescription('Add a CPU player to the draft that auto-picks randomly'),
   new SlashCommandBuilder().setName('start_draft').setDescription('Start the season draft'),

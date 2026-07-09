@@ -27,7 +27,8 @@ function freshData() {
     lastSeasonStandings: [],
     worldsTeams: [],
     seasonTeams: [],
-    pendingTrade: null
+    pendingTrade: null,
+    pickLog: []
   };
 }
 
@@ -267,6 +268,7 @@ async function doBotPick(data, guildId, channel) {
   const team = scored[0].team;
   data.teamsDrafted[BOT_PLAYER_ID].push(team);
   data.currentPick++;
+  data.pickLog.push({ player: BOT_PLAYER_ID, team, pickIndex: data.currentPick - 1 });
 
   const name = await getTeamName(team);
   const maxPicks = data.players.length * 6;
@@ -431,6 +433,7 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply();
       data.teamsDrafted[current].push(team);
       data.currentPick++;
+      data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
       const name = await getTeamName(team);
       const maxPicks = data.players.length * 6;
@@ -625,6 +628,63 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.editReply({
         embeds: [new EmbedBuilder().setTitle("Fantasy Team Breakdown").setDescription(blocks.join('\n\n')).setColor(0x00AE86)]
       });
+    }
+
+    // ── UNDRAFT ─────────────────────────────────────────────────
+    if (interaction.commandName === 'undraft') {
+      if (data.players.length && userId !== data.players[0]) return interaction.reply({ content: "❌ Only the host can undraft.", ephemeral: true });
+      if (!data.pickLog?.length) return interaction.reply({ content: "❌ No picks have been made yet.", ephemeral: true });
+
+      const targetTeam = interaction.options.getInteger('team');
+      let entry;
+
+      if (targetTeam != null) {
+        entry = data.pickLog.slice().reverse().find(p => p.team === targetTeam);
+        if (!entry) return interaction.reply({ content: `❌ Team ${targetTeam} was never picked.`, ephemeral: true });
+      } else {
+        entry = data.pickLog[data.pickLog.length - 1];
+      }
+
+      data.teamsDrafted[entry.player] = data.teamsDrafted[entry.player].filter(t => t !== entry.team);
+      data.pickLog = data.pickLog.filter(p => p.pickIndex !== entry.pickIndex);
+      data.currentPick = entry.pickIndex;
+      if (data.phase === "finished") data.phase = data.seasonTeams.length ? "season" : "worlds";
+      if (data.phase === "worlds_finished") data.phase = "worlds";
+      saveData(data, guildId);
+
+      const name = await getTeamName(entry.team);
+      const current = getCurrentPlayer(data);
+      return interaction.reply(`⏪ Undrafted **${name}** (was pick #${entry.pickIndex + 1} by ${playerDisplay(entry.player)})\n\n👉 Current pick: ${playerDisplay(current)}`);
+    }
+
+    // ── PODIUM ───────────────────────────────────────────────────────
+    if (interaction.commandName === 'podium') {
+      if (!data.players.length) return interaction.reply("No players in the draft yet.");
+      await interaction.deferReply();
+
+      const scoreFn = data.phase === "worlds" || data.phase === "worlds_finished" ? getTeamWorldsScore : getTeamSeasonScore;
+      const medals = ['🥇', '🥈', '🥉'];
+
+      const blocks = await Promise.all(data.players.map(async player => {
+        const teams = data.teamsDrafted[player] || [];
+        const scored = await Promise.all(teams.map(async t => ({ team: t, score: await scoreFn(t) })));
+        scored.sort((a, b) => b.score - a.score);
+        const top3 = scored.slice(0, 3);
+
+        const draftPos = data.draftOrder.indexOf(player) + 1;
+        const posLabel = draftPos ? `Draft position: **#${draftPos}**` : "Draft position: unknown";
+
+        const lines = await Promise.all(top3.map(async (s, i) => {
+          const name = await getTeamName(s.team);
+          return `${medals[i] || '⭐'} **${name}** — ${s.score} pts`;
+        }));
+
+        return `**${playerDisplay(player)}** (${posLabel})\n${lines.join('\n') || 'No teams drafted yet.'}`;
+      }));
+
+      return interaction.editReply({ embeds: [
+        new EmbedBuilder().setTitle("🏆 Fantasy Podium — Top 3 Teams Per Player").setDescription(blocks.join('\n\n')).setColor(0xFFD700)
+      ]});
     }
 
     // ── SHOW ALL FANTASY TEAMS ────────────────────────────────────
