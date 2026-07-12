@@ -3,7 +3,8 @@ require('dotenv').config();
 const {
   Client,
   GatewayIntentBits,
-  EmbedBuilder
+  EmbedBuilder,
+  AttachmentBuilder
 } = require('discord.js');
 
 const fs = require('fs');
@@ -28,7 +29,8 @@ function freshData() {
     worldsTeams: [],
     seasonTeams: [],
     pendingTrade: null,
-    pickLog: []
+    pickLog: [],
+    admins: []
   };
 }
 
@@ -36,6 +38,7 @@ function loadData(guildId) {
   try {
     const d = JSON.parse(fs.readFileSync(`./data_${guildId}.json`));
     if (!d.pendingTrade) d.pendingTrade = null;
+    if (!d.admins) d.admins = d.players.length ? [d.players[0]] : [];
     return d;
   } catch {
     return freshData();
@@ -127,7 +130,19 @@ async function loadWorldsTeams() {
 
 // ---------------- DISPLAY HELPERS ----------------
 function playerDisplay(id) {
-  return id === BOT_PLAYER_ID ? "🤖 **CPU**" : `<@${id}>`;
+  if (id === BOT_PLAYER_ID) return "🤖 **CPU**";
+  if (id.startsWith("MANUAL_")) return `👤 **${id.replace("MANUAL_", "")}**`;
+  return `<@${id}>`;
+}
+
+function playerName(id) {
+  if (id === BOT_PLAYER_ID) return "CPU";
+  if (id.startsWith("MANUAL_")) return id.replace("MANUAL_", "");
+  return `<@${id}>`;
+}
+
+function isAdmin(data, userId) {
+  return data.admins.includes(userId);
 }
 
 // ---------------- SCORING ----------------
@@ -315,8 +330,8 @@ client.on('interactionCreate', async (interaction) => {
     // ── DRAFT STATUS ──────────────────────────────────────────────
     if (interaction.commandName === 'draftstatus') {
       const setToOpen = interaction.options.getBoolean('open');
-      if (data.players.length > 0 && userId !== data.players[0]) {
-        return interaction.reply("❌ Only the draft host can change draft status.");
+      if (data.players.length > 0 && !isAdmin(data, userId)) {
+        return interaction.reply("❌ Only an admin can change draft status.");
       }
       const { REST, Routes } = require('discord.js');
       const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -346,8 +361,31 @@ client.on('interactionCreate', async (interaction) => {
       if (!data.draftOpen) return interaction.reply("❌ Draft joining is currently closed.\nAsk the host to run `/draftstatus open:true`");
       if (data.players.includes(userId)) return interaction.reply("You are already in the draft.");
       data.players.push(userId);
+      if (!data.admins.length) data.admins.push(userId);
       saveData(data, guildId);
       return interaction.reply(`✅ <@${userId}> has joined the draft!`);
+    }
+
+    // ── ADD ADMIN ────────────────────────────────────────────────
+    if (interaction.commandName === 'addadmin') {
+      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can promote others.", ephemeral: true });
+      const target = interaction.options.getUser('user');
+      if (data.admins.includes(target.id)) return interaction.reply({ content: `${target} is already an admin.`, ephemeral: true });
+      data.admins.push(target.id);
+      saveData(data, guildId);
+      return interaction.reply(`✅ ${target} has been promoted to **admin**.`);
+    }
+
+    // ── ADD MANUAL PLAYER ───────────────────────────────────────────────
+    if (interaction.commandName === 'addmanualplayer') {
+      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can add manual players.", ephemeral: true });
+      if (!data.draftOpen) return interaction.reply({ content: "❌ Draft joining is currently closed.", ephemeral: true });
+      const rawName = interaction.options.getString('name').trim();
+      const mId = `MANUAL_${rawName}`;
+      if (data.players.includes(mId)) return interaction.reply({ content: `❌ A player named "${rawName}" is already in the draft.`, ephemeral: true });
+      data.players.push(mId);
+      saveData(data, guildId);
+      return interaction.reply(`👤 **${rawName}** has been added as a manual player!`);
     }
 
     // ── ADD BOT PLAYER ────────────────────────────────────────────
@@ -363,7 +401,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'start_draft') {
       await interaction.deferReply();
       if (!data.players.length) return interaction.editReply("❌ No players have joined yet.");
-      if (userId !== data.players[0]) return interaction.editReply("❌ Only the host can start the draft.");
+      if (!isAdmin(data, userId)) return interaction.editReply("❌ Only an admin can start the draft.");
 
       data.phase = "season";
       data.seasonTeams = await loadSeasonTeams();
@@ -390,7 +428,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'start_worlds_draft') {
       await interaction.deferReply();
       if (!data.players.length) return interaction.editReply("❌ No players have joined yet.");
-      if (userId !== data.players[0]) return interaction.editReply("❌ Only the host can start the draft.");
+      if (!isAdmin(data, userId)) return interaction.editReply("❌ Only an admin can start the draft.");
 
       await interaction.editReply("⏳ Calculating final season standings from TBA…");
 
@@ -423,9 +461,53 @@ client.on('interactionCreate', async (interaction) => {
     // ── PICK TEAM ─────────────────────────────────────────────────
     if (interaction.commandName === 'pick') {
       const team = interaction.options.getInteger('team');
+      const forUser = interaction.options.getUser('for');
+      const actingAdmin = forUser && isAdmin(data, userId);
+      const pickerId = actingAdmin ? forUser.id : userId;
       const current = getCurrentPlayer(data);
 
-      if (userId !== current) return interaction.reply({ content: "⛔ It's not your turn.", ephemeral: true });
+      if (pickerId !== current) return interaction.reply({ content: "⛔ It's not your turn.", ephemeral: true });
+      const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
+      if (!pool.includes(team)) return interaction.reply({ content: `⛔ Team ${team} is not in the pool.`, ephemeral: true });
+      if (findOwner(data, team)) return interaction.reply({ content: `⛔ Team ${team} has already been drafted.`, ephemeral: true });
+
+      await interaction.deferReply();
+      data.teamsDrafted[current].push(team);
+      data.currentPick++;
+      data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
+
+      const name = await getTeamName(team);
+      const maxPicks = data.players.length * 6;
+
+      const actor = actingAdmin ? `<@${userId}> → ${playerDisplay(pickerId)}` : `<@${userId}>`;
+      if (data.currentPick >= maxPicks) {
+        data.phase = data.phase === "worlds" ? "worlds_finished" : "finished";
+        saveData(data, guildId);
+        return interaction.editReply(`✅ ${actor} picked **${name}**\n\n🏁 **Draft complete!** Run \`/standings\` to see the results!`);
+      }
+
+      saveData(data, guildId);
+      const next = getCurrentPlayer(data);
+      await interaction.editReply(`✅ ${actor} picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
+
+      // Trigger CPU auto-pick if it's now the bot's turn
+      if (next === BOT_PLAYER_ID) {
+        await doBotPick(data, guildId, interaction.channel);
+      }
+      return;
+    }
+
+    // ── MANUAL PICK ────────────────────────────────────────────────────────
+    if (interaction.commandName === 'manualpick') {
+      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can pick for manual players.", ephemeral: true });
+      const rawName = interaction.options.getString('player').trim();
+      const mId = `MANUAL_${rawName}`;
+      const current = getCurrentPlayer(data);
+
+      if (!data.players.includes(mId)) return interaction.reply({ content: `❌ Manual player "${rawName}" is not in the draft.`, ephemeral: true });
+      if (current !== mId) return interaction.reply({ content: `⛔ It is not ${rawName}'s turn right now.`, ephemeral: true });
+
+      const team = interaction.options.getInteger('team');
       const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
       if (!pool.includes(team)) return interaction.reply({ content: `⛔ Team ${team} is not in the pool.`, ephemeral: true });
       if (findOwner(data, team)) return interaction.reply({ content: `⛔ Team ${team} has already been drafted.`, ephemeral: true });
@@ -441,14 +523,13 @@ client.on('interactionCreate', async (interaction) => {
       if (data.currentPick >= maxPicks) {
         data.phase = data.phase === "worlds" ? "worlds_finished" : "finished";
         saveData(data, guildId);
-        return interaction.editReply(`✅ <@${userId}> picked **${name}**\n\n🏁 **Draft complete!** Run \`/standings\` to see the results!`);
+        return interaction.editReply(`✅ ${playerDisplay(current)} picked **${name}**\n\n🏁 **Draft complete!** Run \`/standings\` to see the results!`);
       }
 
       saveData(data, guildId);
       const next = getCurrentPlayer(data);
-      await interaction.editReply(`✅ <@${userId}> picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
+      await interaction.editReply(`✅ ${playerDisplay(current)} picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
 
-      // Trigger CPU auto-pick if it's now the bot's turn
       if (next === BOT_PLAYER_ID) {
         await doBotPick(data, guildId, interaction.channel);
       }
@@ -632,7 +713,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── UNDRAFT ─────────────────────────────────────────────────
     if (interaction.commandName === 'undraft') {
-      if (data.players.length && userId !== data.players[0]) return interaction.reply({ content: "❌ Only the host can undraft.", ephemeral: true });
+      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only an admin can undraft.", ephemeral: true });
       if (!data.pickLog?.length) return interaction.reply({ content: "❌ No picks have been made yet.", ephemeral: true });
 
       const targetTeam = interaction.options.getInteger('team');
@@ -689,6 +770,44 @@ client.on('interactionCreate', async (interaction) => {
       ]});
     }
 
+    // ── EXPORT CSV ────────────────────────────────────────────────
+    if (interaction.commandName === 'exportcsv') {
+      await interaction.deferReply({ ephemeral: true });
+      if (!data.players.length) return interaction.editReply("No players in the draft yet.");
+
+      const rows = [['Player', 'Team Number', 'Team Name']];
+      for (const player of data.players) {
+        const teams = data.teamsDrafted[player] || [];
+        const names = await Promise.all(teams.map(getTeamName));
+        for (let i = 0; i < teams.length; i++) {
+          rows.push([playerName(player), String(teams[i]), names[i]]);
+        }
+        if (!teams.length) rows.push([playerName(player), '', 'No teams drafted']);
+      }
+
+      const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const buf = Buffer.from(csv, 'utf-8');
+      const att = new AttachmentBuilder(buf, { name: `fantasy_roster_${CURRENT_YEAR}.csv` });
+      return interaction.editReply({ content: `📄 Here is your ${CURRENT_YEAR} roster backup.`, files: [att] });
+    }
+
+    // ── ROSTER ────────────────────────────────────────────────────
+    if (interaction.commandName === 'roster') {
+      if (!data.players.length) return interaction.reply("No players in the draft yet.");
+      await interaction.deferReply();
+
+      const lines = await Promise.all(data.players.map(async player => {
+        const owned = data.teamsDrafted[player] || [];
+        const names = await Promise.all(owned.map(getTeamName));
+        return `**${playerDisplay(player)}**\n` +
+          (names.length ? names.map(n => `• ${n}`).join('\n') : "No teams drafted yet.");
+      }));
+
+      return interaction.editReply({ embeds: [
+        new EmbedBuilder().setTitle("📋 Fantasy Draft Roster").setDescription(lines.join('\n\n')).setColor(0x00AE86)
+      ]});
+    }
+
     // ── SHOW ALL FANTASY TEAMS ────────────────────────────────────
     if (interaction.commandName === 'teams') {
       if (!data.players.length) return interaction.reply("No players in the draft yet.");
@@ -731,7 +850,7 @@ client.on('interactionCreate', async (interaction) => {
     // ── RESET DRAFT ───────────────────────────────────────────────
     if (interaction.commandName === 'reset_draft') {
       if (interaction.options.getString('confirm') !== "RESET") return interaction.reply("Type `RESET` to confirm.");
-      if (data.players.length && userId !== data.players[0]) return interaction.reply("❌ Only the host can reset.");
+      if (!isAdmin(data, userId)) return interaction.reply("❌ Only an admin can reset.");
       saveData(freshData(), guildId);
       return interaction.reply("🧹 Draft fully reset.");
     }

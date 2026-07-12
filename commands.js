@@ -5,9 +5,24 @@ const fullCommands = [
   new SlashCommandBuilder().setName('currentyear').setDescription('Show the current year the bot is using for TBA data'),
   new SlashCommandBuilder()
     .setName('undraft')
-    .setDescription('Undo the last pick or remove a specific team (host only)')
+    .setDescription('Undo the last pick or remove a specific team (admin only)')
     .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number to undraft (omit to undo last pick)').setRequired(false)),
-  new SlashCommandBuilder().setName('podium').setDescription('Show each player\'s personal top 3 teams with medals and draft position'),
+  new SlashCommandBuilder().setName('podium').setDescription('Show the fantasy podium with personal placement'),
+  new SlashCommandBuilder()
+    .setName('addadmin')
+    .setDescription('Promote a player to admin (admin only)')
+    .addUserOption(opt => opt.setName('user').setDescription('Discord user to promote').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('addmanualplayer')
+    .setDescription('Add a non-Discord player to the draft (admin only)')
+    .addStringOption(opt => opt.setName('name').setDescription('Name for the manual player').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('manualpick')
+    .setDescription('Pick a team for a manual player (admin only)')
+    .addStringOption(opt => opt.setName('player').setDescription('Name of the manual player').setRequired(true))
+    .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true)),
+  new SlashCommandBuilder().setName('exportcsv').setDescription('Export a CSV backup of all rosters'),
+  new SlashCommandBuilder().setName('roster').setDescription('Show all rosters as a clean team list (no scores)'),
   new SlashCommandBuilder().setName('join_draft').setDescription('Join the fantasy draft'),
   new SlashCommandBuilder().setName('addbot').setDescription('Add a CPU player to the draft that auto-picks randomly'),
   new SlashCommandBuilder().setName('start_draft').setDescription('Start the season draft'),
@@ -15,7 +30,8 @@ const fullCommands = [
   new SlashCommandBuilder()
     .setName('pick')
     .setDescription('Pick a team')
-    .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true)),
+    .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true))
+    .addUserOption(opt => opt.setName('for').setDescription('Pick for this player instead of yourself (admin only)').setRequired(false)),
   new SlashCommandBuilder()
     .setName('standings')
     .setDescription('Show live fantasy standings with real scores from TBA'),
@@ -74,6 +90,8 @@ const closedCommands = [
     .addIntegerOption(opt => opt.setName('team').setDescription('FRC team number').setRequired(true)),
   new SlashCommandBuilder().setName('teams').setDescription('Show all fantasy teams and their owners'),
   new SlashCommandBuilder().setName('currentyear').setDescription('Show the current year the bot is using for TBA data'),
+  new SlashCommandBuilder().setName('exportcsv').setDescription('Export a CSV backup of all rosters'),
+  new SlashCommandBuilder().setName('roster').setDescription('Show all rosters as a clean team list (no scores)'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
