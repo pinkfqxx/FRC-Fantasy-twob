@@ -1257,21 +1257,88 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ ephemeral: true });
       if (!data.players.length) return interaction.editReply("No players in the draft yet.");
 
-      const rows = [['Player', 'Team Number', 'Team Name']];
-      for (const player of data.players) {
+      const year = getYear(data);
+      const n = data.draftOrder.length || data.players.length;
+
+      // ── FILE 1: picks_YYYY.csv ──────────────────────────────────────────────
+      // One row per pick in draft order. Calculates round + position from pickIndex.
+      const pickRows = [['Overall Pick', 'Round', 'Round Pick', 'Player', 'Team Number', 'Team Name', 'Is CPU']];
+      const sortedLog = [...(data.pickLog || [])].sort((a, b) => a.pickIndex - b.pickIndex);
+      const pickNames = await Promise.all(sortedLog.map(e => getTeamName(e.team)));
+      for (let i = 0; i < sortedLog.length; i++) {
+        const entry = sortedLog[i];
+        const round = n > 0 ? Math.floor(entry.pickIndex / n) + 1 : '?';
+        const posInRound = n > 0 ? (entry.pickIndex % n) + 1 : '?';
+        pickRows.push([
+          entry.pickIndex + 1,
+          round,
+          posInRound,
+          playerName(entry.player),
+          entry.team,
+          pickNames[i],
+          entry.player === BOT_PLAYER_ID ? 'Yes' : 'No'
+        ]);
+      }
+      const csvPicks = pickRows
+        .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      // ── FILE 2: standings_YYYY.csv ─────────────────────────────────────────
+      // One row per (player, team). Fetches live TBA points for each team,
+      // includes per-event breakdown, doubled flag, and player fantasy total.
+      const standingRows = [['Rank', 'Player', 'Player Total Pts', 'Team Number', 'Team Name',
+        'Event 1 Key', 'Event 1 Pts', 'Event 2 Key', 'Event 2 Pts', 'Raw Total', 'Doubled']];
+
+      // Fetch all breakdowns in parallel per player
+      const playerBreakdowns = await Promise.all(data.players.map(async player => {
         const teams = data.teamsDrafted[player] || [];
-        const names = await Promise.all(teams.map(getTeamName));
-        for (let i = 0; i < teams.length; i++) {
-          rows.push([playerName(player), String(teams[i]), names[i]]);
+        const breakdowns = await Promise.all(teams.map(t => getTeamEventBreakdown(t, year)));
+        const playerTotal = breakdowns.reduce((sum, b) => sum + (b.total || 0), 0);
+        return { player, teams, breakdowns, playerTotal };
+      }));
+
+      // Sort by descending fantasy total for ranking
+      playerBreakdowns.sort((a, b) => b.playerTotal - a.playerTotal);
+
+      let rank = 1;
+      for (const { player, teams, breakdowns, playerTotal } of playerBreakdowns) {
+        if (!teams.length) {
+          standingRows.push([rank, playerName(player), 0, '', 'No teams drafted', '', '', '', '', '', '']);
+          rank++;
+          continue;
         }
-        if (!teams.length) rows.push([playerName(player), '', 'No teams drafted']);
+        for (let i = 0; i < teams.length; i++) {
+          const b = breakdowns[i];
+          const ev1 = b.events[0];
+          const ev2 = b.events[1];
+          standingRows.push([
+            i === 0 ? rank : '',                           // rank only on first row per player
+            i === 0 ? playerName(player) : '',             // name only on first row per player
+            i === 0 ? playerTotal : '',                    // total only on first row per player
+            teams[i],
+            await getTeamName(teams[i]),
+            ev1?.eventKey ?? '',
+            ev1?.rawPoints ?? '',
+            ev2?.eventKey ?? '',
+            ev2?.rawPoints ?? '',
+            b.events.reduce((s, e) => s + (e.rawPoints || 0), 0),
+            b.doubled ? 'Yes' : 'No'
+          ]);
+        }
+        rank++;
       }
 
-      const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-      const buf = Buffer.from(csv, 'utf-8');
-      const y = getYear(data);
-      const att = new AttachmentBuilder(buf, { name: `fantasy_roster_${y}.csv` });
-      return interaction.editReply({ content: `📄 Here is your ${y} roster backup.`, files: [att] });
+      const csvStandings = standingRows
+        .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      const attPicks = new AttachmentBuilder(Buffer.from(csvPicks, 'utf-8'), { name: `picks_${year}.csv` });
+      const attStandings = new AttachmentBuilder(Buffer.from(csvStandings, 'utf-8'), { name: `standings_${year}.csv` });
+
+      return interaction.editReply({
+        content: `📄 **${year} FRC Fantasy Export** — two files attached:\n• \`picks_${year}.csv\` — full draft pick log with round/position\n• \`standings_${year}.csv\` — live standings with per-team event point breakdown`,
+        files: [attPicks, attStandings]
+      });
     }
 
     // ── ROSTER ────────────────────────────────────────────────────
