@@ -325,7 +325,7 @@ async function getTeamHistoricalSeasonScore(teamNumber, currentYear) {
 // Adds a randomness factor to auto-picks: instead of always taking the single
 // highest-scoring team, gather a group of teams that are genuinely comparable in
 // strength and pick randomly among them. "Comparable" is relative, not a fixed number —
-// a team has to score within `minRelativeStrength` (80%) of the best available score to
+// a team has to score within `minRelativeStrength` (90%) of the best available score to
 // even enter the pool, capped at `poolSize` candidates. This matters because a flat
 // top-10-by-count pool can include teams far behind the leader once the score gap widens
 // (e.g. early in a draft with a long tail of weaker teams); a relative floor keeps every
