@@ -9,7 +9,7 @@ async function main() {
   console.log(`Pool size: ${allTeams.length} teams`);
 
   // Sample a manageable pool of teams to score, so this finishes in reasonable time.
-  const sampleSize = 60;
+  const sampleSize = 150;
   const shuffled = [...allTeams].sort(() => Math.random() - 0.5);
   const sample = shuffled.slice(0, sampleSize);
 

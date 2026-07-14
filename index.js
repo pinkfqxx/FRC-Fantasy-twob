@@ -332,7 +332,7 @@ async function getTeamHistoricalSeasonScore(teamNumber, currentYear) {
 // candidate close to the best option regardless of how the scores happen to be
 // distributed, and it naturally tightens or loosens as the pool of remaining teams changes
 // through the draft — no hardcoded score threshold to keep in sync with a given season/pool.
-function pickWithRandomness(scoredList, poolSize = 10, minRelativeStrength = 0.8) {
+function pickWithRandomness(scoredList, poolSize = 10, minRelativeStrength = 0.9) {
   const sorted = [...scoredList].sort((a, b) => b.score - a.score);
   const topScore = sorted[0]?.score ?? 0;
   const candidates = sorted
