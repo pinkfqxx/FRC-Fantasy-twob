@@ -3241,8 +3241,9 @@ client.on('interactionCreate', async (interaction) => {
 
   } catch (err) {
     console.error(err);
-    if (interaction.deferred) interaction.editReply("❌ An error occurred.").catch(() => {});
-    else if (!interaction.replied) interaction.reply("❌ An error occurred.").catch(() => {});
+    const errMsg = `❌ An error occurred: \`${String(err?.message || err).slice(0, 500)}\``;
+    if (interaction.deferred) interaction.editReply(errMsg).catch(() => {});
+    else if (!interaction.replied) interaction.reply({ content: errMsg, ephemeral: true }).catch(() => {});
     // Send alert to the guild's announcements channel so the admin is notified
     sendBotAlert(guildId,
       `Command Error: \`/${interaction.commandName}\``,
