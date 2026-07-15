@@ -100,9 +100,10 @@ function loadGuildConfig(guildId) {
     if (!('pickTimerMinutes'    in cfg)) cfg.pickTimerMinutes    = 0;
     if (!('tradeLockOverride'   in cfg)) cfg.tradeLockOverride   = null; // null = auto rules, true = force locked, false = force open
     if (!('botTradingEnabled'   in cfg)) cfg.botTradingEnabled   = true;
+    if (!('botAutoPickEnabled'  in cfg)) cfg.botAutoPickEnabled  = true;
     return cfg;
   } catch {
-    return { draftChannelId: null, announcementChannelId: null, lastPostedWeek: -1, predictionMessageId: null, pickTimerMinutes: 0, tradeLockOverride: null, botTradingEnabled: true };
+    return { draftChannelId: null, announcementChannelId: null, lastPostedWeek: -1, predictionMessageId: null, pickTimerMinutes: 0, tradeLockOverride: null, botTradingEnabled: true, botAutoPickEnabled: true };
   }
 }
 
@@ -1170,12 +1171,23 @@ async function firePickTimerWarning(guildId, channelId, mainMinutes) {
   const ch = await client.channels.fetch(channelId).catch(() => null);
   const graceMinutes = graceMinutesFor(mainMinutes);
 
+  const guildCfg = loadGuildConfig(guildId);
+
   if (ch) {
-    await ch.send(
-      `⏰ ${playerDisplay(current)}, your pick timer expired!\n` +
-      `You have **${formatMinutes(graceMinutes)} more minute${graceMinutes === 1 ? '' : 's'}** to pick before you're auto-skipped.`
-    ).catch(() => {});
+    if (guildCfg.botAutoPickEnabled) {
+      await ch.send(
+        `⏰ ${playerDisplay(current)}, your pick timer expired!\n` +
+        `You have **${formatMinutes(graceMinutes)} more minute${graceMinutes === 1 ? '' : 's'}** to pick before you're auto-skipped.`
+      ).catch(() => {});
+    } else {
+      await ch.send(
+        `⏰ ${playerDisplay(current)}, your pick timer expired!\n` +
+        `*(Auto-pick is disabled — waiting for a manual pick.)*`
+      ).catch(() => {});
+    }
   }
+
+  if (!guildCfg.botAutoPickEnabled) return; // auto-pick disabled; draft waits for a manual pick
 
   const handle = setTimeout(() => {
     performAutoSkip(guildId, channelId).catch(err =>
@@ -1191,6 +1203,10 @@ async function performAutoSkip(guildId, channelId) {
   const data = loadData(channelId);
   if (!data.players.length || data.phase === 'none' ||
       data.phase === 'finished' || data.phase === 'worlds_finished') return;
+
+  // Safety net: if auto-pick was disabled between the timer firing and now, bail out.
+  const guildCfg = loadGuildConfig(guildId);
+  if (!guildCfg.botAutoPickEnabled) return;
 
   const current = getCurrentPlayer(data);
   if (isBotPlayer(current)) return; // bots never need auto-skipping
@@ -1578,6 +1594,7 @@ const HELP_CATEGORIES = [
       '`/admin trade manualaccept [tradeid]` — Accept any pending trade by Trade ID *(admin)*',
       '`/admin trade manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
       '`/config bottrading enable` / `disable` — Allow or block trades with CPU players *(admin)*',
+      '`/config botpicksforplayers enable` / `disable` — Allow or block auto-pick via `/pick skip` and timer expiry *(admin)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -2452,6 +2469,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'skip') {
+      if (!guildConfig.botAutoPickEnabled) return interaction.reply({ content: "❌ Auto-pick is disabled on this server. You must pick a team manually with `/pick team`.", ephemeral: true });
       const current = getCurrentPlayer(data);
       if (userId !== current && !isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "⛔ It's not your turn (or you are not an admin).", ephemeral: true });
       const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
@@ -3125,6 +3143,20 @@ client.on('interactionCreate', async (interaction) => {
         content: enabling
           ? "✅ CPU player trading **enabled** — players can now propose trades to CPU players."
           : "🚫 CPU player trading **disabled** — players can no longer propose trades to CPU players.",
+        ephemeral: true
+      });
+    }
+
+    // ── CONFIG BOTPICKSFORPLAYERS ──────────────────────────────────
+    if (interaction.commandName === 'config' && interaction.options.getSubcommandGroup() === 'botpicksforplayers') {
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can change server configuration.", ephemeral: true });
+      const enabling = interaction.options.getSubcommand() === 'enable';
+      guildConfig.botAutoPickEnabled = enabling;
+      saveGuildConfig(guildConfig, guildId);
+      return interaction.reply({
+        content: enabling
+          ? "✅ Auto-pick **enabled** — `/pick skip` works and the bot will auto-pick for players whose timer expires."
+          : "🚫 Auto-pick **disabled** — players must always pick manually. `/pick skip` is blocked and the timer will only warn, not auto-pick.",
         ephemeral: true
       });
     }

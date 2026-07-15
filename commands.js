@@ -210,7 +210,16 @@ const fullCommands = [
         .setDescription('Allow players to propose trades to CPU players (default)'))
       .addSubcommand(sub => sub
         .setName('disable')
-        .setDescription('Prevent players from proposing trades to CPU players'))),
+        .setDescription('Prevent players from proposing trades to CPU players')))
+    .addSubcommandGroup(group => group
+      .setName('botpicksforplayers')
+      .setDescription('Control whether the bot auto-picks for players (/pick skip and timer expiry)')
+      .addSubcommand(sub => sub
+        .setName('enable')
+        .setDescription('Allow auto-pick via /pick skip and on timer expiry (default)'))
+      .addSubcommand(sub => sub
+        .setName('disable')
+        .setDescription('Disable auto-pick — players must always pick manually'))),
 
   new SlashCommandBuilder().setName('help').setDescription('Show a full command reference'),
   new SlashCommandBuilder().setName('rules').setDescription('Show the fantasy scoring rules'),
