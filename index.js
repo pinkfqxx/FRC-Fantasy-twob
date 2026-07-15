@@ -1304,6 +1304,74 @@ async function doBotPick(data, channelId, channel, guildId) {
   }
 }
 
+// Evaluates whether a CPU player accepts or declines a proposed trade.
+// Uses the same scoring as auto-pick (historical season avg or live worlds score).
+// Base acceptance: 45%. Improved lineup: up to +30%. Hurt lineup: up to -20%.
+// Logs verbosely so admins can follow the reasoning in the console.
+async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
+  const isWorlds = phase === 'worlds' || phase === 'worlds_finished';
+  const scoreFn = isWorlds
+    ? t => getTeamWorldsScore(t, year)
+    : t => getTeamHistoricalSeasonScore(t, year);
+
+  const botNum = botNumber(botId);
+  const label = `CPU ${botNum} Trade Eval`;
+
+  console.log(`\n🤖 [${label}] ${'─'.repeat(48)}`);
+  console.log(`🤖 [${label}] Incoming trade proposal — resolving immediately.`);
+  console.log(`🤖 [${label}]   Phase: ${phase} | Scoring: ${isWorlds ? 'live Worlds (TBA)' : 'historical season avg (3yr)'}`);
+  console.log(`🤖 [${label}]   Bot gives up : FRC ${wantingTeam}`);
+  console.log(`🤖 [${label}]   Bot receives : FRC ${offeringTeam}`);
+  console.log(`🤖 [${label}] Fetching scores from TBA...`);
+
+  const [wantingScore, offeringScore] = await Promise.all([
+    scoreFn(wantingTeam).catch(() => 0),
+    scoreFn(offeringTeam).catch(() => 0),
+  ]);
+  const [wantingName, offeringName] = await Promise.all([
+    getTeamName(wantingTeam).catch(() => `Team ${wantingTeam}`),
+    getTeamName(offeringTeam).catch(() => `Team ${offeringTeam}`),
+  ]);
+
+  console.log(`🤖 [${label}] ── Scores ─${'─'.repeat(38)}`);
+  console.log(`🤖 [${label}]   FRC ${wantingTeam}  (${wantingName})`);
+  console.log(`🤖 [${label}]     → score: ${wantingScore.toFixed(2)} pts  [bot is GIVING this up]`);
+  console.log(`🤖 [${label}]   FRC ${offeringTeam}  (${offeringName})`);
+  console.log(`🤖 [${label}]     → score: ${offeringScore.toFixed(2)} pts  [bot is RECEIVING this]`);
+
+  const BASE_CHANCE = 0.45;
+  const delta = offeringScore - wantingScore;            // positive = bot gains
+  const ref   = Math.max(wantingScore, 1);               // avoid div/0
+
+  let modifier;
+  if (delta >= 0) {
+    // Improvement: scale 0 → +30% as delta goes from 0 → ref (100% gain)
+    modifier = Math.min(delta / ref, 1) * 0.30;
+  } else {
+    // Degradation: scale 0 → -20% as delta goes from 0 → -ref (100% loss)
+    modifier = Math.max(delta / ref, -1) * 0.20;
+  }
+
+  const finalChance = Math.max(0, Math.min(1, BASE_CHANCE + modifier));
+  const roll        = Math.random();
+  const accepted    = roll < finalChance;
+
+  console.log(`🤖 [${label}] ── Calculation ${'─'.repeat(34)}`);
+  console.log(`🤖 [${label}]   Score delta (receiving − giving) : ${delta >= 0 ? '+' : ''}${delta.toFixed(2)} pts`);
+  console.log(`🤖 [${label}]   Reference value (giving team)    : ${ref.toFixed(2)} pts`);
+  console.log(`🤖 [${label}]   Relative change                  : ${(delta / ref * 100).toFixed(1)}%`);
+  console.log(`🤖 [${label}]   Base acceptance chance           : ${(BASE_CHANCE * 100).toFixed(0)}%`);
+  console.log(`🤖 [${label}]   Lineup impact modifier           : ${modifier >= 0 ? '+' : ''}${(modifier * 100).toFixed(2)}%  (cap: ${delta >= 0 ? '+30%' : '-20%'})`);
+  console.log(`🤖 [${label}]   Final acceptance chance          : ${(finalChance * 100).toFixed(2)}%`);
+  console.log(`🤖 [${label}] ── Roll ${'─'.repeat(41)}`);
+  console.log(`🤖 [${label}]   Roll  : ${(roll * 100).toFixed(2)}`);
+  console.log(`🤖 [${label}]   Needs : < ${(finalChance * 100).toFixed(2)} to accept`);
+  console.log(`🤖 [${label}]   Result: ${accepted ? '✅ ACCEPTED' : '❌ DECLINED'}`);
+  console.log(`🤖 [${label}] ${'─'.repeat(48)}\n`);
+
+  return { accepted, baseChance: BASE_CHANCE, modifier, finalChance, roll, offeringScore, wantingScore };
+}
+
 // ---------------- GLOBAL ERROR SAFETY ----------------
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection (bot kept alive):', err);
@@ -2125,8 +2193,9 @@ client.on('interactionCreate', async (interaction) => {
       const theirOwner = findOwner(data, wanting);
       if (!theirOwner) return interaction.reply({ content: `❌ FRC ${wanting} hasn't been drafted yet.`, ephemeral: true });
       if (theirOwner === userId) return interaction.reply({ content: "❌ You already own that team.", ephemeral: true });
-      if (isBotPlayer(theirOwner)) return interaction.reply({ content: "❌ You can't trade with a CPU player.", ephemeral: true });
-      if (data.pendingTrade) return interaction.reply({ content: "❌ There's already a pending trade. It must be accepted, declined, or cancelled first.", ephemeral: true });
+      // Bot trades resolve immediately — no pendingTrade slot needed, so only block on
+      // an existing pending trade when the recipient is a real (non-bot) player.
+      if (!isBotPlayer(theirOwner) && data.pendingTrade) return interaction.reply({ content: "❌ There's already a pending trade. It must be accepted, declined, or cancelled first.", ephemeral: true });
 
       // Trade lock: an admin override always wins; otherwise the default rules apply —
       // locked after Week 5 concludes, and locked 24h after the worlds draft finishes.
@@ -2135,15 +2204,38 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: "🔒 Trading has been manually locked by an admin (`/trade lock`).", ephemeral: true });
       }
       if (guildConfig.tradeLockOverride !== false) {
-        // lastPostedWeek is 0-indexed; >= 4 means Week 5 (0–4) has been posted.
-        // Week 5 is chosen as the trade deadline because it's typically the last
-        // regular-season district event week before DCMP — trades after that point
-        // would let players game final standings with near-complete information.
         if (guildConfig.lastPostedWeek >= 4) {
           return interaction.reply({ content: "🔒 Trading is closed — the trade deadline passed after Week 5.", ephemeral: true });
         }
         if (data.phase === "worlds_finished" && data.worldsFinishedAt && (Date.now() - data.worldsFinishedAt) >= WORLDS_TRADE_GRACE_MS) {
           return interaction.reply({ content: "🔒 Trading is closed — it's been more than 24 hours since the worlds draft finished.", ephemeral: true });
+        }
+      }
+
+      // ── BOT TRADE: evaluate and resolve immediately ───────────────
+      if (isBotPlayer(theirOwner)) {
+        await interaction.deferReply();
+        const year = getYear(data);
+        const [offerName, wantName] = await Promise.all([getTeamName(offering), getTeamName(wanting)]);
+        const result = await evaluateBotTrade(theirOwner, offering, wanting, year, data.phase);
+
+        if (result.accepted) {
+          data.teamsDrafted[userId]     = (data.teamsDrafted[userId]     || []).filter(t => t !== offering);
+          data.teamsDrafted[theirOwner] = (data.teamsDrafted[theirOwner] || []).filter(t => t !== wanting);
+          data.teamsDrafted[userId].push(wanting);
+          data.teamsDrafted[theirOwner].push(offering);
+          saveData(data, channelId);
+          return interaction.editReply(
+            `✅ **Trade accepted by ${playerDisplay(theirOwner)}!**\n` +
+            `${playerDisplay(userId)} receives **${wantName}** (FRC ${wanting})\n` +
+            `${playerDisplay(theirOwner)} receives **${offerName}** (FRC ${offering})\n\n` +
+            `*Acceptance chance: ${(result.finalChance * 100).toFixed(1)}% · Roll: ${(result.roll * 100).toFixed(1)}*`
+          );
+        } else {
+          return interaction.editReply(
+            `❌ **${playerDisplay(theirOwner)} declined the trade.**\n\n` +
+            `*Acceptance chance was ${(result.finalChance * 100).toFixed(1)}% · Roll: ${(result.roll * 100).toFixed(1)}*`
+          );
         }
       }
 
