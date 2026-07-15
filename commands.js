@@ -48,7 +48,11 @@ const fullCommands = [
     .addSubcommand(sub => sub
       .setName('hardreset')
       .setDescription('Nuclear option: wipe all data if things are bugged beyond repair (Manage Server)')
-      .addStringOption(opt => opt.setName('confirm').setDescription('Type HARDRESET to confirm').setRequired(true))),
+      .addStringOption(opt => opt.setName('confirm').setDescription('Type HARDRESET to confirm').setRequired(true)))
+    .addSubcommand(sub => sub
+      .setName('restore')
+      .setDescription('Rebuild draft state from this channel\'s message history (admin only)')
+      .addStringOption(opt => opt.setName('confirm').setDescription('Type RESTORE to confirm (overwrites current data)').setRequired(true))),
 
   new SlashCommandBuilder()
     .setName('pick')

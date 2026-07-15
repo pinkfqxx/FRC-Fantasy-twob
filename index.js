@@ -1462,6 +1462,7 @@ const HELP_CATEGORIES = [
       '`/draft reset` — Fully reset the draft *(admin)*',
       '`/draft hardreset` — Nuclear option: wipe all data + server config if things are bugged beyond repair *(Manage Server)*',
       '`/nuke` — Full server reconfiguration: wipes all draft data, resets config, recreates `#frc-fantasy-updates` *(Manage Server, two-step confirmation)*',
+      '`/draft restore` — Rebuild draft state from this channel\'s message history (useful after a restart with missing data) *(admin)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -2652,6 +2653,66 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply(
         `☢️ **Hard reset complete.** Wiped draft data for ${wipedChannels.length || 1} channel(s) and reset this server's configuration ` +
         `(draft channel binding, admins, pick timer, trade lock override).\n\nRun \`/admin setchannel\` to pick a draft channel, then \`/draft status open:true\` to reopen the draft.`
+      );
+    }
+
+    // ── RESTORE FROM MESSAGE HISTORY ─────────────────────────────
+    if (interaction.commandName === 'draft' && interaction.options.getSubcommand() === 'restore') {
+      if (!isEffectiveAdmin(data, interaction)) {
+        return interaction.reply({ content: "❌ Only admins can restore from message history.", ephemeral: true });
+      }
+      if (interaction.options.getString('confirm') !== "RESTORE") {
+        return interaction.reply({
+          content: "⚠️ This will **overwrite** the current draft data with a version rebuilt from this channel's message history.\n\nType `RESTORE` to confirm.",
+          ephemeral: true
+        });
+      }
+      if (!guildConfig.draftChannelId) {
+        return interaction.reply({ content: "❌ No draft channel is configured. Run `/admin setchannel` first.", ephemeral: true });
+      }
+
+      await interaction.deferReply();
+
+      let rebuilt;
+      try {
+        rebuilt = await rebuildDataFromChannelHistory(guildConfig.draftChannelId);
+      } catch (err) {
+        console.error('Manual restore failed:', err);
+        return interaction.editReply("❌ Restore failed with an unexpected error. Check the console for details.");
+      }
+
+      if (!rebuilt) {
+        return interaction.editReply(
+          "❌ Couldn't rebuild from message history. This usually means the scan hit the 1 000-message limit without finding a reset boundary — the history may be too long or the channel hasn't had a recent `/draft status open:false` or `/draft reset`.\n\n" +
+          "If the draft is truly lost, use `/draft status open:true` to start fresh."
+        );
+      }
+
+      if (!rebuilt.players.length && rebuilt.phase === 'none' && !rebuilt.pickLog.length) {
+        return interaction.editReply("ℹ️ Message history was scanned but no draft activity was found. Nothing was changed.");
+      }
+
+      saveData(rebuilt, guildConfig.draftChannelId);
+
+      const phaseLabel = {
+        none: 'none',
+        season: 'Season draft in progress',
+        finished: 'Season draft complete',
+        worlds: 'Worlds draft in progress',
+        worlds_finished: 'Worlds draft complete',
+      }[rebuilt.phase] || rebuilt.phase;
+
+      const playerCount = rebuilt.players.length;
+      const pickCount = rebuilt.pickLog?.length ?? 0;
+      const teamCount = Object.values(rebuilt.teamsDrafted).reduce((n, teams) => n + teams.length, 0);
+
+      return interaction.editReply(
+        `✅ **Draft state restored from message history.**\n` +
+        `• **Phase:** ${phaseLabel}\n` +
+        `• **Players:** ${playerCount}\n` +
+        `• **Picks logged:** ${pickCount} (${teamCount} teams assigned)\n` +
+        `• **Year:** ${rebuilt.year ?? 'auto'}\n\n` +
+        `If anything looks wrong, use \`/stats roster\` to verify rosters, or \`/draft reset\` to start over.`
       );
     }
 

@@ -49,6 +49,7 @@ Commands are grouped into a handful of top-level commands with subcommands (rath
 | `/draft start mode:season\|worlds` | Start the season draft, or the Worlds draft (auto-calculates season standings and reverses order) — host only |
 | `/draft order` | Show the upcoming pick order |
 | `/draft timer minutes:<n>` | Set the auto-skip timer; `0` disables it — admin only |
+| `/draft restore confirm:RESTORE` | Rebuild draft state from this channel's message history — useful after a restart with missing data (admin) |
 | `/draft reset confirm:RESET` | Reset the draft |
 | `/draft hardreset confirm:HARDRESET` | Nuclear option — wipes all draft data files and the server's config for this guild when things are bugged beyond repair. Gated on Discord's native "Manage Server" permission (not the bot's internal admin list, since that list could itself be corrupted) |
 | `/pick team team:<number>` | Pick an FRC team by number |
