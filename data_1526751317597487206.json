@@ -1,0 +1,16 @@
+{
+  "players": [],
+  "draftOrder": [],
+  "teamsDrafted": {},
+  "currentPick": 0,
+  "phase": "none",
+  "draftOpen": true,
+  "lastSeasonStandings": [],
+  "worldsTeams": [],
+  "seasonTeams": [],
+  "pendingTrade": null,
+  "pickLog": [],
+  "admins": [],
+  "year": null,
+  "worldsFinishedAt": null
+}

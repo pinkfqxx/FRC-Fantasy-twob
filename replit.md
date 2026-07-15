@@ -31,6 +31,12 @@ The bot is multi-server by design and does not need a hardcoded guild or channel
 
 **Status:** Dependencies are installed, secrets (`TOKEN`, `CLIENT_ID`, `TBA_KEY`) are set, the "Start application" workflow runs `node index.js` and the bot is logged in to Discord. Slash commands have been registered globally via `node commands.js` (can take up to an hour to appear in a server — invite the bot to a server to use it).
 
+## Maintenance Notes for Future Agents
+
+- **Adding or changing a command?** Update three things: (1) `commands.js` — add/edit the `SlashCommandBuilder` entry; (2) the `HELP_CATEGORIES` array in `index.js` — add a line to the relevant category; (3) the command table below in this file. Then run `node commands.js` so Discord picks up the new registration (global commands can take up to an hour to propagate in servers).
+- **Adding new persistent server state?** Update `/nuke` in `index.js` — both the warning embed (so users know what will be wiped) and the `nuke_confirm` button handler (where the actual reset happens). See `.agents/memory/nuke-command-maintenance.md` for the checklist.
+- **Restarting after code changes?** Restart the "Start application" workflow and confirm the log shows `Logged in as FRC Fantasy Draft#4415` before testing.
+
 ## Slash Commands
 
 Commands are grouped into a handful of top-level commands with subcommands (rather than ~35 flat commands) so Discord's command list stays short while typing `/draft`, `/pick`, etc. still autocompletes every related action. A single command set is always registered — handlers gate behavior at runtime off `data.draftOpen`/`data.phase`, there's no more swapping the registered command list when the draft opens/closes.

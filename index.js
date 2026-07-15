@@ -1421,6 +1421,16 @@ client.on('guildCreate', async (guild) => {
 
 // ---------------- HELP MENU (button-driven) ----------------
 // Each category backs both a home-menu button and its own drill-down embed.
+// ── /help content ─────────────────────────────────────────────────────────────
+// MAINTENANCE NOTE FOR FUTURE AGENTS:
+// Whenever you add, rename, or remove a slash command or a significant user-facing
+// feature, update HELP_CATEGORIES below AND the command table in replit.md.
+// Also run `node commands.js` after any change to commands.js so Discord picks up
+// the new registration (global commands can take up to an hour to propagate).
+//
+// Structure: each category has an id (matches the button customId suffix),
+// an emoji + label shown on the home page, a short description, and a lines[]
+// array of markdown strings shown when the user opens that category.
 const HELP_CATEGORIES = [
   {
     id: 'setup',
