@@ -2766,6 +2766,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const name = await getTeamName(entry.team);
       const current = getCurrentPlayer(data);
+      maybeDmNextPlayer(current, data).catch(() => {});
       return interaction.reply(`⏪ Undrafted **${name}** (was pick #${entry.pickIndex + 1} by ${playerDisplay(entry.player)})\n\n👉 Current pick: ${playerDisplay(current)}`);
     }
 
