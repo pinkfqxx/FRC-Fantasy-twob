@@ -219,7 +219,33 @@ const fullCommands = [
         .setDescription('Allow auto-pick via /pick skip and on timer expiry (default)'))
       .addSubcommand(sub => sub
         .setName('disable')
-        .setDescription('Disable auto-pick — players must always pick manually'))),
+        .setDescription('Disable auto-pick — players must always pick manually')))
+    .addSubcommandGroup(group => group
+      .setName('pick')
+      .setDescription('Configure pick settings')
+      .addSubcommand(sub => sub
+        .setName('teamspickable')
+        .setDescription('Number of teams each player drafts (3–8, default 6)')
+        .addIntegerOption(opt => opt
+          .setName('count')
+          .setDescription('Teams per player (3–8)')
+          .setRequired(true)
+          .setMinValue(3)
+          .setMaxValue(8))))
+    .addSubcommandGroup(group => group
+      .setName('draft')
+      .setDescription('Configure draft style')
+      .addSubcommand(sub => sub
+        .setName('style')
+        .setDescription('Set the draft order style for the next draft')
+        .addStringOption(opt => opt
+          .setName('mode')
+          .setDescription('Draft style')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Snake — alternating direction each round (default)', value: 'snake' },
+            { name: 'Popcorn — random new order each round', value: 'popcorn' }
+          )))),
 
   new SlashCommandBuilder().setName('help').setDescription('Show a full command reference'),
   new SlashCommandBuilder().setName('rules').setDescription('Show the fantasy scoring rules'),

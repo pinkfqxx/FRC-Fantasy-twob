@@ -33,9 +33,12 @@ function freshData() {
   return {
     players: [],
     draftOrder: [],
+    pickOrder: [],        // full flat pick sequence; generated at /draft start
     teamsDrafted: {},
     currentPick: 0,
     phase: "none",
+    draftStyle: 'snake',  // 'snake' or 'popcorn'; copied from guild config at draft start
+    teamsPerPlayer: 6,    // teams each player drafts; copied from guild config at draft start
     draftOpen: false,
     lastSeasonStandings: [],
     worldsTeams: [],
@@ -74,6 +77,9 @@ function loadData(channelId) {
     if (!('worldsFinishedAt' in d)) d.worldsFinishedAt = null;
     if (!('draftId' in d)) d.draftId = null;
     if (!('botTradeAttempts' in d)) d.botTradeAttempts = {};
+    if (!('pickOrder'        in d)) d.pickOrder        = [];
+    if (!('draftStyle'       in d)) d.draftStyle       = 'snake';
+    if (!('teamsPerPlayer'   in d)) d.teamsPerPlayer   = 6;
     return d;
   } catch {
     return freshData();
@@ -101,9 +107,11 @@ function loadGuildConfig(guildId) {
     if (!('tradeLockOverride'   in cfg)) cfg.tradeLockOverride   = null; // null = auto rules, true = force locked, false = force open
     if (!('botTradingEnabled'   in cfg)) cfg.botTradingEnabled   = true;
     if (!('botAutoPickEnabled'  in cfg)) cfg.botAutoPickEnabled  = true;
+    if (!('teamsPerPlayer'      in cfg)) cfg.teamsPerPlayer      = 6;
+    if (!('draftStyle'          in cfg)) cfg.draftStyle          = 'snake';
     return cfg;
   } catch {
-    return { draftChannelId: null, announcementChannelId: null, lastPostedWeek: -1, predictionMessageId: null, pickTimerMinutes: 0, tradeLockOverride: null, botTradingEnabled: true, botAutoPickEnabled: true };
+    return { draftChannelId: null, announcementChannelId: null, lastPostedWeek: -1, predictionMessageId: null, pickTimerMinutes: 0, tradeLockOverride: null, botTradingEnabled: true, botAutoPickEnabled: true, teamsPerPlayer: 6, draftStyle: 'snake' };
   }
 }
 
@@ -993,6 +1001,13 @@ async function recoverAllGuildData() {
       const onDiskLooksEmpty = !onDisk.players.length && onDisk.phase === 'none';
 
       if (rebuiltProgress >= onDiskProgress || (onDiskLooksEmpty && (rebuilt.players.length || rebuiltProgress))) {
+        // For snake drafts, regenerate the deterministic pick order from the
+        // recovered draft order. Popcorn orders were random and can't be reconstructed.
+        if (rebuilt.draftOrder.length > 0 && rebuilt.pickOrder.length === 0 && rebuilt.phase !== 'none') {
+          if (rebuilt.draftStyle !== 'popcorn') {
+            rebuilt.pickOrder = generatePickOrder(rebuilt.draftOrder, rebuilt.teamsPerPlayer || 6, rebuilt.draftStyle || 'snake');
+          }
+        }
         saveData(rebuilt, config.draftChannelId);
         console.log(`Startup recovery: rebuilt draft state for channel ${config.draftChannelId} from message history (${rebuiltProgress} picks, ${rebuilt.players.length} players).`);
       }
@@ -1228,7 +1243,7 @@ async function performAutoSkip(guildId, channelId) {
   data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
   const name = await getTeamName(team);
-  const maxPicks = data.players.length * 6;
+  const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
   const ch = await client.channels.fetch(channelId).catch(() => null);
   if (!ch) { saveData(data, channelId); return; }
 
@@ -1257,10 +1272,31 @@ async function performAutoSkip(guildId, channelId) {
 
 // ---------------- DRAFT HELPERS ----------------
 function getCurrentPlayer(data) {
+  // Use pre-generated pick order when available (supports both snake and popcorn).
+  // Falls back to the deterministic snake formula for saves that predate pickOrder.
+  if (data.pickOrder && data.pickOrder.length > 0) return data.pickOrder[data.currentPick];
   const n = data.draftOrder.length;
   const round = Math.floor(data.currentPick / n);
   const index = data.currentPick % n;
   return (round % 2 === 0) ? data.draftOrder[index] : data.draftOrder[n - 1 - index];
+}
+
+// Generates the full flat pick sequence for a draft.
+// Snake: even rounds go left→right through draftOrder, odd rounds right→left.
+// Popcorn: each round is a fresh random shuffle so no player picks twice before
+// everyone else has gone, and the order re-randomises every round.
+function generatePickOrder(draftOrder, teamsPerPlayer, style) {
+  const order = [];
+  for (let round = 0; round < teamsPerPlayer; round++) {
+    if (style === 'popcorn') {
+      const shuffled = [...draftOrder].sort(() => Math.random() - 0.5);
+      order.push(...shuffled);
+    } else {
+      // Snake: even rounds forward, odd rounds backward
+      order.push(...(round % 2 === 0 ? [...draftOrder] : [...draftOrder].reverse()));
+    }
+  }
+  return order;
 }
 
 function findOwner(data, team) {
@@ -1297,7 +1333,7 @@ async function doBotPick(data, channelId, channel, guildId) {
   data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
   const name = await getTeamName(team);
-  const maxPicks = data.players.length * 6;
+  const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
 
   if (data.currentPick >= maxPicks) {
     data.phase = data.phase === "worlds" ? "worlds_finished" : "finished";
@@ -1595,6 +1631,8 @@ const HELP_CATEGORIES = [
       '`/admin trade manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
       '`/config bottrading enable` / `disable` — Allow or block trades with CPU players *(admin)*',
       '`/config botpicksforplayers enable` / `disable` — Allow or block auto-pick via `/pick skip` and timer expiry *(admin)*',
+      '`/config pick teamspickable [n]` — Set how many teams each player drafts (3–8, default 6) *(admin)*',
+      '`/config draft style [snake|popcorn]` — Snake reverses order each round; Popcorn reshuffles randomly each round *(admin)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -2080,6 +2118,9 @@ client.on('interactionCreate', async (interaction) => {
         data.draftOrder = [...data.lastSeasonStandings].reverse();
         data.currentPick = 0;
         data.teamsDrafted = Object.fromEntries(data.players.map(p => [p, []]));
+        data.draftStyle = guildConfig.draftStyle || 'snake';
+        data.teamsPerPlayer = guildConfig.teamsPerPlayer || 6;
+        data.pickOrder = generatePickOrder(data.draftOrder, data.teamsPerPlayer, data.draftStyle);
         data.draftOpen = false;
         data.pendingTrade = null;
         saveData(data, channelId);
@@ -2088,9 +2129,10 @@ client.on('interactionCreate', async (interaction) => {
         const standingsText = seasonStandings
           .map((p, i) => `${medals[i] || `${i + 1}.`} ${playerDisplay(p.player)} — **${p.totalScore} pts**`)
           .join('\n');
+        const styleLabel = data.draftStyle === 'popcorn' ? 'Popcorn 🍿' : 'Snake 🐍';
 
         await interaction.editReply(
-          `🌍 **Worlds Draft Started!**\n\n**Final Season Standings:**\n${standingsText}\n\n**Draft Order** (worst → best):\n${data.draftOrder.map(playerDisplay).join(' → ')}\n\nFirst pick: ${playerDisplay(data.draftOrder[0])}`
+          `🌍 **Worlds Draft Started!**\n\n**Final Season Standings:**\n${standingsText}\n\n**Draft Order** (worst → best):\n${data.draftOrder.map(playerDisplay).join(' → ')}\n\nStyle: **${styleLabel}** · **${data.teamsPerPlayer}** teams per player\n\nFirst pick: ${playerDisplay(getCurrentPlayer(data))}`
         );
 
         if (isBotPlayer(getCurrentPlayer(data))) {
@@ -2105,13 +2147,17 @@ client.on('interactionCreate', async (interaction) => {
       data.draftOrder = [...data.players].sort(() => Math.random() - 0.5);
       data.currentPick = 0;
       data.teamsDrafted = Object.fromEntries(data.players.map(p => [p, []]));
+      data.draftStyle = guildConfig.draftStyle || 'snake';
+      data.teamsPerPlayer = guildConfig.teamsPerPlayer || 6;
+      data.pickOrder = generatePickOrder(data.draftOrder, data.teamsPerPlayer, data.draftStyle);
       data.draftOpen = false;
       data.pendingTrade = null;
       saveData(data, channelId);
 
       const first = getCurrentPlayer(data);
+      const styleLabel = data.draftStyle === 'popcorn' ? 'Popcorn 🍿' : 'Snake 🐍';
       await interaction.editReply(
-        `🚀 **Season Draft Started!**\nTeams loaded: ${data.seasonTeams.length}\nFirst pick: ${playerDisplay(first)}`
+        `🚀 **Season Draft Started!**\nTeams loaded: ${data.seasonTeams.length} · Style: **${styleLabel}** · **${data.teamsPerPlayer}** teams per player\nFirst pick: ${playerDisplay(first)}`
       );
 
       // If CPU goes first, auto-pick immediately
@@ -2142,7 +2188,7 @@ client.on('interactionCreate', async (interaction) => {
       data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
       const name = await getTeamName(team);
-      const maxPicks = data.players.length * 6;
+      const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
 
       const actor = actingAdmin ? `<@${userId}> → ${playerDisplay(pickerId)}` : `<@${userId}>`;
       if (data.currentPick >= maxPicks) {
@@ -2191,7 +2237,7 @@ client.on('interactionCreate', async (interaction) => {
       data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
       const name = await getTeamName(team);
-      const maxPicks = data.players.length * 6;
+      const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
 
       if (data.currentPick >= maxPicks) {
         data.phase = data.phase === "worlds" ? "worlds_finished" : "finished";
@@ -2507,7 +2553,7 @@ client.on('interactionCreate', async (interaction) => {
       data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
       const name = await getTeamName(team);
-      const maxPicks = data.players.length * 6;
+      const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
 
       if (data.currentPick >= maxPicks) {
         data.phase = data.phase === "worlds" ? "worlds_finished" : "finished";
@@ -2972,15 +3018,15 @@ client.on('interactionCreate', async (interaction) => {
 
       const count = Math.min(interaction.options.getInteger('picks') ?? 10, 20);
       const n = data.draftOrder.length;
-      const maxPicks = data.players.length * 6;
+      const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
       const lines = [];
 
       for (let i = 0; i < count; i++) {
         const idx = data.currentPick + i;
         if (idx >= maxPicks) break;
-        const round = Math.floor(idx / n);
-        const pos = idx % n;
-        const player = round % 2 === 0 ? data.draftOrder[pos] : data.draftOrder[n - 1 - pos];
+        const player = data.pickOrder.length > 0
+          ? data.pickOrder[idx]
+          : (() => { const r = Math.floor(idx / n); const p = idx % n; return r % 2 === 0 ? data.draftOrder[p] : data.draftOrder[n - 1 - p]; })();
         const marker = i === 0 ? ' ← **now**' : '';
         lines.push(`\`Pick ${idx + 1}\` — ${playerDisplay(player)}${marker}`);
       }
@@ -3174,6 +3220,32 @@ client.on('interactionCreate', async (interaction) => {
         content: enabling
           ? "✅ Auto-pick **enabled** — `/pick skip` works and the bot will auto-pick for players whose timer expires."
           : "🚫 Auto-pick **disabled** — players must always pick manually. `/pick skip` is blocked and the timer will only warn, not auto-pick.",
+        ephemeral: true
+      });
+    }
+
+    // ── CONFIG PICK TEAMSPICKABLE ─────────────────────────────────
+    if (interaction.commandName === 'config' && interaction.options.getSubcommandGroup() === 'pick' && interaction.options.getSubcommand() === 'teamspickable') {
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can change server configuration.", ephemeral: true });
+      const count = interaction.options.getInteger('count');
+      guildConfig.teamsPerPlayer = count;
+      saveGuildConfig(guildConfig, guildId);
+      return interaction.reply({
+        content: `✅ Teams per player set to **${count}**. Takes effect on the next \`/draft start\`.`,
+        ephemeral: true
+      });
+    }
+
+    // ── CONFIG DRAFT STYLE ────────────────────────────────────────
+    if (interaction.commandName === 'config' && interaction.options.getSubcommandGroup() === 'draft' && interaction.options.getSubcommand() === 'style') {
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can change server configuration.", ephemeral: true });
+      const mode = interaction.options.getString('mode');
+      guildConfig.draftStyle = mode;
+      saveGuildConfig(guildConfig, guildId);
+      return interaction.reply({
+        content: mode === 'popcorn'
+          ? "🍿 Draft style set to **Popcorn** — each round uses a fresh random pick order. Takes effect on the next `/draft start`."
+          : "🐍 Draft style set to **Snake** — pick order reverses each round (default). Takes effect on the next `/draft start`.",
         ephemeral: true
       });
     }

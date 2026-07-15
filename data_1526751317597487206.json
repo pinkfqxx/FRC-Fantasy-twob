@@ -9,6 +9,26 @@
     "BOT_PLAYER_2",
     "BOT_PLAYER"
   ],
+  "pickOrder": [
+    "1356452145750212662",
+    "BOT_PLAYER_2",
+    "BOT_PLAYER",
+    "BOT_PLAYER",
+    "BOT_PLAYER_2",
+    "1356452145750212662",
+    "1356452145750212662",
+    "BOT_PLAYER_2",
+    "BOT_PLAYER",
+    "BOT_PLAYER",
+    "BOT_PLAYER_2",
+    "1356452145750212662",
+    "1356452145750212662",
+    "BOT_PLAYER_2",
+    "BOT_PLAYER",
+    "BOT_PLAYER",
+    "BOT_PLAYER_2",
+    "1356452145750212662"
+  ],
   "teamsDrafted": {
     "1356452145750212662": [
       4414,
@@ -37,6 +57,8 @@
   },
   "currentPick": 18,
   "phase": "finished",
+  "draftStyle": "snake",
+  "teamsPerPlayer": 6,
   "draftOpen": false,
   "lastSeasonStandings": [],
   "worldsTeams": [],
