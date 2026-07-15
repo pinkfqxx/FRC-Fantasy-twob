@@ -1,8 +1,10 @@
 {
   "draftChannelId": "1526751317597487206",
-  "announcementChannelId": "1526803149770330162",
+  "announcementChannelId": "1527079242066559037",
   "lastPostedWeek": -1,
   "predictionMessageId": null,
   "pickTimerMinutes": 0,
-  "tradeLockOverride": null
+  "tradeLockOverride": null,
+  "botTradingEnabled": true,
+  "botAutoPickEnabled": true
 }

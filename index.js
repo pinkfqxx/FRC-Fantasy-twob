@@ -1989,6 +1989,7 @@ client.on('interactionCreate', async (interaction) => {
         saveData(data, channelId);
         return interaction.reply(`✅ **Draft is now OPEN** · ID: **${data.draftId}**\nPlayers can now join using \`/draft join\` or add a CPU with \`/draft addbot\``);
       } else {
+        clearPickTimer(guildId);
         saveData(freshData(), channelId);
         // Bulk delete the bot's own recent messages in this channel
         try {
@@ -2122,6 +2123,8 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── PICK TEAM ─────────────────────────────────────────────────
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'team') {
+      if (data.phase === 'none') return interaction.reply({ content: "❌ The draft hasn't started yet.", ephemeral: true });
+      if (data.phase === 'finished' || data.phase === 'worlds_finished') return interaction.reply({ content: "❌ The draft is already complete.", ephemeral: true });
       const team = interaction.options.getInteger('team');
       const forUser = interaction.options.getUser('for');
       const actingAdmin = forUser && isEffectiveAdmin(data, interaction);
@@ -2168,6 +2171,8 @@ client.on('interactionCreate', async (interaction) => {
     // ── MANUAL PICK ────────────────────────────────────────────────────────
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'manual') {
       if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can pick for manual players.", ephemeral: true });
+      if (data.phase === 'none') return interaction.reply({ content: "❌ The draft hasn't started yet.", ephemeral: true });
+      if (data.phase === 'finished' || data.phase === 'worlds_finished') return interaction.reply({ content: "❌ The draft is already complete.", ephemeral: true });
       const rawName = interaction.options.getString('player').trim();
       const mId = `MANUAL_${rawName}`;
       const current = getCurrentPlayer(data);
@@ -2384,8 +2389,18 @@ client.on('interactionCreate', async (interaction) => {
       }
       if (userId !== trade.to) return interaction.reply({ content: "❌ This trade isn't directed at you.", ephemeral: true });
 
-      data.teamsDrafted[trade.from] = data.teamsDrafted[trade.from].filter(t => t !== trade.offering);
-      data.teamsDrafted[trade.to]   = data.teamsDrafted[trade.to].filter(t => t !== trade.wanting);
+      // Verify ownership is still valid — an undo between proposal and acceptance
+      // could have changed things (mirrors the DM-button handler's check).
+      const fromTeams = data.teamsDrafted[trade.from] ?? [];
+      const toTeams   = data.teamsDrafted[trade.to]   ?? [];
+      if (!fromTeams.includes(trade.offering) || !toTeams.includes(trade.wanting)) {
+        data.pendingTrade = null;
+        saveData(data, channelId);
+        return interaction.reply({ content: "❌ This trade is no longer valid — one or both teams have changed hands since the proposal was sent. The trade has been cancelled.", ephemeral: true });
+      }
+
+      data.teamsDrafted[trade.from] = fromTeams.filter(t => t !== trade.offering);
+      data.teamsDrafted[trade.to]   = toTeams.filter(t => t !== trade.wanting);
       data.teamsDrafted[trade.from].push(trade.wanting);
       data.teamsDrafted[trade.to].push(trade.offering);
       data.pendingTrade = null;
@@ -2470,6 +2485,8 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'skip') {
       if (!guildConfig.botAutoPickEnabled) return interaction.reply({ content: "❌ Auto-pick is disabled on this server. You must pick a team manually with `/pick team`.", ephemeral: true });
+      if (data.phase === 'none') return interaction.reply({ content: "❌ The draft hasn't started yet.", ephemeral: true });
+      if (data.phase === 'finished' || data.phase === 'worlds_finished') return interaction.reply({ content: "❌ The draft is already complete.", ephemeral: true });
       const current = getCurrentPlayer(data);
       if (userId !== current && !isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "⛔ It's not your turn (or you are not an admin).", ephemeral: true });
       const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
@@ -2618,7 +2635,7 @@ client.on('interactionCreate', async (interaction) => {
         entry = data.pickLog[data.pickLog.length - 1];
       }
 
-      data.teamsDrafted[entry.player] = data.teamsDrafted[entry.player].filter(t => t !== entry.team);
+      data.teamsDrafted[entry.player] = (data.teamsDrafted[entry.player] || []).filter(t => t !== entry.team);
       data.pickLog = data.pickLog.filter(p => p.pickIndex !== entry.pickIndex);
       data.currentPick = entry.pickIndex;
       // "finished" only ever comes from the season draft completing (doBotPick/pick/skip/
@@ -3169,8 +3186,18 @@ client.on('interactionCreate', async (interaction) => {
       const inputId = interaction.options.getString('tradeid');
       if (inputId !== trade.tradeId) return interaction.reply({ content: `❌ Trade ID \`${inputId}\` doesn't match the pending trade (\`${trade.tradeId}\`).`, ephemeral: true });
 
-      data.teamsDrafted[trade.from] = data.teamsDrafted[trade.from].filter(t => t !== trade.offering);
-      data.teamsDrafted[trade.to]   = data.teamsDrafted[trade.to].filter(t => t !== trade.wanting);
+      // Verify ownership is still valid — an undo between proposal and acceptance
+      // could have changed things (mirrors the DM-button handler's check).
+      const fromTeamsM = data.teamsDrafted[trade.from] ?? [];
+      const toTeamsM   = data.teamsDrafted[trade.to]   ?? [];
+      if (!fromTeamsM.includes(trade.offering) || !toTeamsM.includes(trade.wanting)) {
+        data.pendingTrade = null;
+        saveData(data, channelId);
+        return interaction.reply({ content: "❌ This trade is no longer valid — one or both teams have changed hands since the proposal was sent. The trade has been cancelled.", ephemeral: true });
+      }
+
+      data.teamsDrafted[trade.from] = fromTeamsM.filter(t => t !== trade.offering);
+      data.teamsDrafted[trade.to]   = toTeamsM.filter(t => t !== trade.wanting);
       data.teamsDrafted[trade.from].push(trade.wanting);
       data.teamsDrafted[trade.to].push(trade.offering);
       data.pendingTrade = null;
