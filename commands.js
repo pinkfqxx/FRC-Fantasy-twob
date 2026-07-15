@@ -163,7 +163,11 @@ const fullCommands = [
     .addSubcommand(sub => sub
       .setName('announce')
       .setDescription('Post a custom message to #frc-fantasy-updates (admin only)')
-      .addStringOption(opt => opt.setName('message').setDescription('Message to post').setRequired(true).setMaxLength(2000))),
+      .addStringOption(opt => opt.setName('message').setDescription('Message to post').setRequired(true).setMaxLength(2000)))
+    .addSubcommand(sub => sub
+      .setName('setup')
+      .setDescription('Recreate the announcements channel and wipe all draft data (Manage Server)')
+      .addStringOption(opt => opt.setName('confirm').setDescription('Type SETUP to confirm — this wipes all draft data for this server').setRequired(true))),
 
   new SlashCommandBuilder()
     .setName('season')

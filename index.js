@@ -1441,6 +1441,7 @@ const HELP_CATEGORIES = [
     lines: [
       '`/stats export` — Export draft data as two CSV files',
       '`/admin announce [message]` — Post to #frc-fantasy-updates *(admin)*',
+      '`/admin setup` — Reconfigure server from scratch: recreate announcements channel, wipe draft data, check permissions *(Manage Server)*',
     ]
   },
 ];
@@ -2524,6 +2525,134 @@ client.on('interactionCreate', async (interaction) => {
           .setTimestamp()
       ]});
       return interaction.reply({ content: "✅ Announcement posted.", ephemeral: true });
+    }
+
+    // ── SETUP (reconfigure server from scratch) ─────────────────
+    // Wipes all draft data and guild config, deletes the stale announcements channel,
+    // checks permissions, and recreates #frc-fantasy-updates fresh. Gated on Discord's
+    // native Manage Server permission so it works even when the bot's own admin list is
+    // corrupted or simply missing (as on servers running an older bot version).
+    if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'setup') {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        return interaction.reply({ content: "❌ You need **Manage Server** permission to run setup.", ephemeral: true });
+      }
+      if (interaction.options.getString('confirm') !== 'SETUP') {
+        return interaction.reply({
+          content: "⚠️ This wipes **all draft data** for this server, resets the server config, and recreates `#frc-fantasy-updates`.\n\nType `SETUP` (all caps) to confirm.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply();
+      const steps = [];
+
+      // ── 1. Clear any running pick timer ───────────────────────
+      clearPickTimer(guildId);
+      steps.push('⏱️ Pick timer cleared.');
+
+      // ── 2. Wipe all draft data files that belong to this guild ─
+      // Iterates every data_<channelId>.json on disk and deletes ones whose channel
+      // resolves to this guild, so stale files from old draft channels are cleaned up too.
+      const wipedChannels = [];
+      for (const file of fs.readdirSync('.')) {
+        if (!/^data_\d+\.json$/.test(file)) continue;
+        const candidateId = file.slice('data_'.length, -'.json'.length);
+        try {
+          const ch = await client.channels.fetch(candidateId).catch(() => null);
+          if (ch && ch.guildId === guildId) {
+            fs.unlinkSync(file);
+            wipedChannels.push(candidateId);
+          }
+        } catch { /* skip inaccessible channels */ }
+      }
+      // Always ensure the current channel's file is gone even if the fetch above failed.
+      const currentDataFile = `./data_${channelId}.json`;
+      if (fs.existsSync(currentDataFile) && !wipedChannels.includes(channelId)) fs.unlinkSync(currentDataFile);
+      steps.push(`🗑️ Draft data wiped (${Math.max(wipedChannels.length, 1)} data file(s) removed).`);
+
+      // ── 3. Delete stale announcements channel if it still exists
+      const oldConfig = loadGuildConfig(guildId);
+      if (oldConfig.announcementChannelId) {
+        const oldAnnCh = await interaction.guild.channels.fetch(oldConfig.announcementChannelId).catch(() => null);
+        if (oldAnnCh) {
+          await oldAnnCh.delete('FRC Fantasy /admin setup — recreating announcements channel').catch(() => {});
+          steps.push('🗑️ Old `#frc-fantasy-updates` channel deleted.');
+        }
+      }
+
+      // ── 4. Reset guild config ───────────────────────────────────
+      const configFile = `./guild_config_${guildId}.json`;
+      if (fs.existsSync(configFile)) fs.unlinkSync(configFile);
+      steps.push('🔄 Server config reset (channel bindings, timer, trade lock).');
+
+      // ── 5. Permission check ─────────────────────────────────────
+      const botMember = interaction.guild.members.me;
+      const missingPerms = botMember
+        ? REQUIRED_PERMISSIONS.filter(p => !botMember.permissions.has(p))
+        : REQUIRED_PERMISSIONS;
+
+      let permNote = '';
+      if (missingPerms.length) {
+        const missingList = missingPerms.map(p => `• **${PERMISSION_NAMES[p] ?? String(p)}**`).join('\n');
+        const inviteLink = client.generateInvite({ scopes: ['bot', 'applications.commands'], permissions: REQUIRED_PERMISSIONS });
+        permNote = `\n\n⚠️ **Missing permissions — some features won't work until these are granted:**\n${missingList}\n\nKick and re-invite the bot with all permissions: <${inviteLink}>`;
+        steps.push('⚠️ Missing permissions detected (see below).');
+      } else {
+        steps.push('✅ All required permissions are present.');
+      }
+
+      // ── 6. Recreate #frc-fantasy-updates ────────────────────────
+      let annChannel = null;
+      try {
+        annChannel = await interaction.guild.channels.create({
+          name: 'frc-fantasy-updates',
+          type: ChannelType.GuildText,
+          topic: 'FRC Fantasy Draft announcements and weekly standings — managed by the bot',
+          permissionOverwrites: [
+            {
+              id: interaction.guild.roles.everyone,
+              deny: [PermissionFlagsBits.SendMessages],
+              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]
+            },
+            {
+              id: client.user.id,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.EmbedLinks,
+                PermissionFlagsBits.AttachFiles,
+                PermissionFlagsBits.ReadMessageHistory
+              ]
+            }
+          ]
+        });
+
+        // Save the new channel ID to a fresh guild config.
+        const freshConfig = loadGuildConfig(guildId); // returns blank defaults since we wiped the file
+        freshConfig.announcementChannelId = annChannel.id;
+        saveGuildConfig(freshConfig, guildId);
+
+        await annChannel.send(
+          '🔄 **FRC Fantasy Bot has been reconfigured for this server.**\n\n' +
+          'This channel will receive:\n' +
+          '• 📋 Full draft rosters when a draft completes\n' +
+          '• 📅 Weekly standings as FRC event results come in\n' +
+          '• 🔮 Live Statbotics predictions (updated every 3 hours during active events)\n' +
+          '• ⚠️ Bot error alerts\n\n' +
+          'A server admin should run `/admin setchannel` in whichever channel you want to use for draft commands.'
+        );
+        steps.push(`✅ \`#frc-fantasy-updates\` recreated successfully.`);
+      } catch (err) {
+        steps.push('❌ Could not create `#frc-fantasy-updates` — check that the bot has **Manage Channels** permission.');
+        console.error('setup: channel creation failed:', err);
+      }
+
+      return interaction.editReply(
+        `🛠️ **Server setup complete.**\n\n` +
+        steps.join('\n') +
+        `\n\n**Next steps:** Run \`/admin setchannel\` in your draft channel, then \`/draft status open:true\` to begin.` +
+        permNote
+      );
     }
 
   } catch (err) {
