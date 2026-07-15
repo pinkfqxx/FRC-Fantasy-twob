@@ -557,6 +557,48 @@ async function postRosterAnnouncement(data, guildId) {
   }
 }
 
+// DMs the current first-place player when a draft pick phase completes.
+// At season-draft completion scores are typically 0 (season hasn't started yet),
+// so this is most meaningful when worlds_finished fires after the regular season.
+// Silently swallows all errors — a failed DM must never crash the draft flow.
+async function dmDraftWinner(data, guildId) {
+  try {
+    const isWorlds = data.phase === 'worlds_finished';
+    const year = getYear(data);
+    const scoreFn = isWorlds
+      ? t => getTeamWorldsScore(t, year)
+      : t => getTeamSeasonScore(t, year);
+
+    const standings = await calcStandings(data, scoreFn);
+    if (!standings.length) return;
+
+    const winner = standings[0];
+    if (isBotPlayer(winner.player)) return; // CPU bot in first — nobody to DM
+
+    const guild      = await client.guilds.fetch(guildId).catch(() => null);
+    const winnerUser = await client.users.fetch(winner.player).catch(() => null);
+    if (!winnerUser) return;
+
+    const phaseLabel = isWorlds ? 'Worlds Fantasy Draft' : `${year} FRC Fantasy Draft`;
+    const guildName  = guild?.name ?? 'your fantasy league';
+
+    await winnerUser.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`🏆 You won the ${phaseLabel}!`)
+          .setDescription(
+            `Congratulations! You finished in **1st place** in **${guildName}** ` +
+            `with **${winner.totalScore} pts**.\n\n` +
+            `Run \`/stats standings\` in the server to see the full leaderboard.`
+          )
+          .setColor(0xFFD700)
+      ]
+    });
+  } catch (err) {
+    console.error('dmDraftWinner error:', err);
+  }
+}
+
 // Posts Week N standings to the guild's announcements channel.
 // weekNum is 0-indexed (TBA's week field); displayed as "Week N+1".
 // SIDE EFFECT: updates config.lastPostedWeek and writes guild_config_<guildId>.json
@@ -1147,6 +1189,7 @@ async function performAutoSkip(guildId, channelId) {
     saveData(data, channelId);
     clearPickTimer(guildId);
     if (data.phase === 'finished') postRosterAnnouncement(data, guildId).catch(() => {});
+    dmDraftWinner(data, guildId).catch(() => {});
     await ch.send(`⏱️ **Grace period expired.** ${playerDisplay(current)} was auto-picked → **${name}**\n\n🏁 **Draft complete!** Run \`/stats standings\` to see the results.`);
     return;
   }
@@ -1214,6 +1257,7 @@ async function doBotPick(data, channelId, channel, guildId) {
     clearPickTimer(guildId);
     await channel.send(`${playerDisplay(current)} picked **${name}**\n\n🏁 **Draft complete!** Run \`/stats standings\` to see the results!`);
     if (data.phase === "finished" && guildId) postRosterAnnouncement(data, guildId).catch(() => {});
+    if (guildId) dmDraftWinner(data, guildId).catch(() => {});
     return;
   }
 
@@ -1651,6 +1695,72 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // ── Trade accept/decline buttons from DMs ──────────────────────
+  // When a trade is proposed the recipient gets a DM with Accept/Decline buttons.
+  // Those interactions arrive with no guild context (interaction.guildId is null),
+  // so they must be handled before the guild guard below.
+  // customId format: trade_accept_<guildId>_<channelId>
+  //                  trade_decline_<guildId>_<channelId>
+  if (interaction.isButton() && (interaction.customId.startsWith('trade_accept_') || interaction.customId.startsWith('trade_decline_'))) {
+    const parts          = interaction.customId.split('_');
+    const action         = parts[1];          // 'accept' or 'decline'
+    const tradeGuildId   = parts[2];
+    const tradeChannelId = parts[3];
+    const responderId    = interaction.user.id;
+
+    try { await interaction.deferUpdate(); } catch { return; }
+
+    const tradeData = loadData(tradeChannelId);
+    const trade     = tradeData.pendingTrade;
+
+    if (!trade) {
+      return interaction.editReply({ content: '❌ There is no longer a pending trade — it may have already been resolved in the server.', embeds: [], components: [] });
+    }
+    if (responderId !== trade.to) {
+      return interaction.editReply({ content: '❌ This trade is not directed at you.', embeds: [], components: [] });
+    }
+
+    if (action === 'decline') {
+      tradeData.pendingTrade = null;
+      saveData(tradeData, tradeChannelId);
+      const tradeCh = await client.channels.fetch(tradeChannelId).catch(() => null);
+      if (tradeCh) await tradeCh.send(`❌ <@${responderId}> declined the trade proposed by <@${trade.from}>.`).catch(() => {});
+      return interaction.editReply({ content: '❌ Trade declined.', embeds: [], components: [] });
+    }
+
+    // Accept — verify ownership is still valid (an undraft could have changed things
+    // between when the proposal was sent and when the button was clicked), then swap.
+    const fromTeams = tradeData.teamsDrafted[trade.from] ?? [];
+    const toTeams   = tradeData.teamsDrafted[trade.to]   ?? [];
+    if (!fromTeams.includes(trade.offering) || !toTeams.includes(trade.wanting)) {
+      return interaction.editReply({
+        content: '❌ This trade is no longer valid — one or both teams have changed hands since the proposal was sent.',
+        embeds: [], components: []
+      });
+    }
+    tradeData.teamsDrafted[trade.from] = fromTeams.filter(t => t !== trade.offering);
+    tradeData.teamsDrafted[trade.to]   = toTeams.filter(t => t !== trade.wanting);
+    tradeData.teamsDrafted[trade.from].push(trade.wanting);
+    tradeData.teamsDrafted[trade.to].push(trade.offering);
+    tradeData.pendingTrade = null;
+    saveData(tradeData, tradeChannelId);
+
+    const [offerName, wantName] = await Promise.all([getTeamName(trade.offering), getTeamName(trade.wanting)]);
+
+    // Post the acceptance in the draft channel so all players see it
+    const tradeCh = await client.channels.fetch(tradeChannelId).catch(() => null);
+    if (tradeCh) {
+      await tradeCh.send(
+        `✅ **Trade accepted!**\n<@${trade.from}> receives **${wantName}**\n<@${trade.to}> receives **${offerName}**`
+      ).catch(() => {});
+    }
+    return interaction.editReply({
+      content: `✅ **Trade accepted!**\n**You receive:** ${offerName}\n**They receive:** ${wantName}`,
+      embeds: [],
+      components: []
+    });
+  }
+
   if (!interaction.isChatInputCommand()) return;
   if (!interaction.guildId) return interaction.reply({ content: "This bot only works inside a server.", ephemeral: true });
 
@@ -1894,6 +2004,7 @@ client.on('interactionCreate', async (interaction) => {
         saveData(data, channelId);
         clearPickTimer(guildId);
         if (data.phase === "finished") postRosterAnnouncement(data, guildId).catch(() => {});
+        dmDraftWinner(data, guildId).catch(() => {});
         return interaction.editReply(`✅ ${actor} picked **${name}**\n\n🏁 **Draft complete!** Run \`/stats standings\` to see the results!`);
       }
 
@@ -1939,6 +2050,7 @@ client.on('interactionCreate', async (interaction) => {
         saveData(data, channelId);
         clearPickTimer(guildId);
         if (data.phase === "finished") postRosterAnnouncement(data, guildId).catch(() => {});
+        dmDraftWinner(data, guildId).catch(() => {});
         return interaction.editReply(`✅ ${playerDisplay(current)} picked **${name}**\n\n🏁 **Draft complete!** Run \`/stats standings\` to see the results!`);
       }
 
@@ -1995,6 +2107,38 @@ client.on('interactionCreate', async (interaction) => {
       saveData(data, channelId);
 
       const [offerName, wantName] = await Promise.all([getTeamName(offering), getTeamName(wanting)]);
+
+      // DM the recipient with interactive Accept/Decline buttons.
+      // Fire-and-forget — silently ignored if the user has DMs disabled.
+      client.users.fetch(theirOwner).then(async recipientUser => {
+        const senderName = interaction.member?.displayName ?? interaction.user.username;
+        await recipientUser.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🔄 Trade Proposal')
+              .setDescription(
+                `**${senderName}** wants to trade with you on **${interaction.guild.name}**.\n\n` +
+                `**They offer:** FRC ${offering} — ${offerName}\n` +
+                `**They want from you:** FRC ${wanting} — ${wantName}\n\n` +
+                `Use the buttons below, or run \`/trade accept\` / \`/trade decline\` in the server.`
+              )
+              .setColor(0xF0A500)
+          ],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`trade_accept_${guildId}_${channelId}`)
+                .setLabel('✅ Accept Trade')
+                .setStyle(ButtonStyle.Success),
+              new ButtonBuilder()
+                .setCustomId(`trade_decline_${guildId}_${channelId}`)
+                .setLabel('❌ Decline Trade')
+                .setStyle(ButtonStyle.Danger)
+            )
+          ]
+        });
+      }).catch(() => {}); // silently ignore if DMs are disabled
+
       return interaction.reply({ embeds: [
         new EmbedBuilder()
           .setTitle("🔄 Trade Proposal")
@@ -2002,7 +2146,7 @@ client.on('interactionCreate', async (interaction) => {
             `<@${userId}> wants to trade with <@${theirOwner}>\n\n` +
             `**Offering:** ${offerName}\n` +
             `**Requesting:** ${wantName}\n\n` +
-            `<@${theirOwner}>: run \`/trade accept\` to accept or \`/trade decline\` to decline.`
+            `<@${theirOwner}>: run \`/trade accept\` to accept or \`/trade decline\` to decline *(a DM with buttons has been sent if your DMs are open)*.`
           )
           .setColor(0xF0A500)
       ]});
@@ -2130,6 +2274,7 @@ client.on('interactionCreate', async (interaction) => {
         saveData(data, channelId);
         clearPickTimer(guildId);
         if (data.phase === "finished") postRosterAnnouncement(data, guildId).catch(() => {});
+        dmDraftWinner(data, guildId).catch(() => {});
         return interaction.editReply(`⚡ ${playerDisplay(current)} skipped and picked **${name}**\n\n🏁 **Draft complete!**`);
       }
 
