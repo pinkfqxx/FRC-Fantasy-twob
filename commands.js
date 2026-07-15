@@ -199,6 +199,19 @@ const fullCommands = [
       .setDescription('Type NUKE to proceed to the confirmation step')
       .setRequired(true)),
 
+  new SlashCommandBuilder()
+    .setName('config')
+    .setDescription('Server configuration (admin only)')
+    .addSubcommandGroup(group => group
+      .setName('bottrading')
+      .setDescription('Control whether players can propose trades to CPU players')
+      .addSubcommand(sub => sub
+        .setName('enable')
+        .setDescription('Allow players to propose trades to CPU players (default)'))
+      .addSubcommand(sub => sub
+        .setName('disable')
+        .setDescription('Prevent players from proposing trades to CPU players'))),
+
   new SlashCommandBuilder().setName('help').setDescription('Show a full command reference'),
   new SlashCommandBuilder().setName('rules').setDescription('Show the fantasy scoring rules'),
 ];

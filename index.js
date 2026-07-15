@@ -99,9 +99,10 @@ function loadGuildConfig(guildId) {
     if (!('predictionMessageId' in cfg)) cfg.predictionMessageId = null;
     if (!('pickTimerMinutes'    in cfg)) cfg.pickTimerMinutes    = 0;
     if (!('tradeLockOverride'   in cfg)) cfg.tradeLockOverride   = null; // null = auto rules, true = force locked, false = force open
+    if (!('botTradingEnabled'   in cfg)) cfg.botTradingEnabled   = true;
     return cfg;
   } catch {
-    return { draftChannelId: null, announcementChannelId: null, lastPostedWeek: -1, predictionMessageId: null, pickTimerMinutes: 0, tradeLockOverride: null };
+    return { draftChannelId: null, announcementChannelId: null, lastPostedWeek: -1, predictionMessageId: null, pickTimerMinutes: 0, tradeLockOverride: null, botTradingEnabled: true };
   }
 }
 
@@ -1574,8 +1575,9 @@ const HELP_CATEGORIES = [
       '`/draft hardreset` — Nuclear option: wipe all data + server config if things are bugged beyond repair *(Manage Server)*',
       '`/nuke` — Full server reconfiguration: wipes all draft data, resets config, recreates `#frc-fantasy-updates` *(Manage Server, two-step confirmation)*',
       '`/draft restore` — Rebuild draft state from this channel\'s message history (useful after a restart with missing data) *(admin)*',
-      '`/admin manualaccept [tradeid]` — Accept any pending trade by Trade ID *(admin)*',
-      '`/admin manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
+      '`/admin trade manualaccept [tradeid]` — Accept any pending trade by Trade ID *(admin)*',
+      '`/admin trade manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
+      '`/config bottrading enable` / `disable` — Allow or block trades with CPU players *(admin)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -2226,6 +2228,9 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       // ── BOT TRADE: evaluate and resolve immediately ───────────────
+      if (isBotPlayer(theirOwner) && !guildConfig.botTradingEnabled) {
+        return interaction.reply({ content: "❌ Trading with CPU players is disabled. An admin can enable it with `/config bottrading enable`.", ephemeral: true });
+      }
       if (isBotPlayer(theirOwner)) {
         const MAX_BOT_TRADE_ATTEMPTS = 2;
         const tradeKey = `${offering}-${wanting}`;
@@ -3108,6 +3113,20 @@ client.on('interactionCreate', async (interaction) => {
           )
           .setFooter({ text: 'Scores update live from The Blue Alliance' })
       ]});
+    }
+
+    // ── CONFIG BOTTRADING ─────────────────────────────────────────
+    if (interaction.commandName === 'config' && interaction.options.getSubcommandGroup() === 'bottrading') {
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can change server configuration.", ephemeral: true });
+      const enabling = interaction.options.getSubcommand() === 'enable';
+      guildConfig.botTradingEnabled = enabling;
+      saveGuildConfig(guildConfig, guildId);
+      return interaction.reply({
+        content: enabling
+          ? "✅ CPU player trading **enabled** — players can now propose trades to CPU players."
+          : "🚫 CPU player trading **disabled** — players can no longer propose trades to CPU players.",
+        ephemeral: true
+      });
     }
 
     // ── ADMIN MANUAL ACCEPT TRADE ─────────────────────────────────
