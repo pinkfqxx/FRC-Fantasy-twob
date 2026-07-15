@@ -23,8 +23,10 @@ const client = new Client({
 const BOT_PLAYER_ID = "BOT_PLAYER"; // legacy alias for CPU slot #1, kept for backward compatibility with saved drafts
 const BOT_PLAYER_IDS = ["BOT_PLAYER", "BOT_PLAYER_2", "BOT_PLAYER_3"];
 const MAX_BOTS = BOT_PLAYER_IDS.length;
+// Returns true if the given player ID belongs to a CPU auto-pick slot.
 function isBotPlayer(id) { return BOT_PLAYER_IDS.includes(id); }
-function botNumber(id) { return BOT_PLAYER_IDS.indexOf(id) + 1; } // 1-based; 0 if not a bot
+// Returns 1-indexed CPU slot number (1, 2, or 3). Returns 0 if id is not a bot.
+function botNumber(id) { return BOT_PLAYER_IDS.indexOf(id) + 1; }
 
 // ---------------- DATA (per-server) ----------------
 function freshData() {
@@ -46,6 +48,10 @@ function freshData() {
   };
 }
 
+// Loads per-channel draft state from disk. Fills in missing fields added in later
+// versions so old save files remain compatible. Returns freshData() on any error
+// (missing file, corrupt JSON, etc.) — the bot always starts from a clean slate
+// rather than crashing on a bad save.
 function loadData(channelId) {
   try {
     const d = JSON.parse(fs.readFileSync(`./data_${channelId}.json`));
@@ -59,10 +65,14 @@ function loadData(channelId) {
   }
 }
 
+// Returns the active FRC season year for this draft. Falls back to the current
+// calendar year if no year has been set via /season set.
 function getYear(data) {
   return data.year || new Date().getFullYear();
 }
 
+// Persists draft state to disk. Called after every state-mutating action so the
+// bot can resume correctly after a restart. SIDE EFFECT: writes data_<channelId>.json.
 function saveData(data, channelId) {
   fs.writeFileSync(`./data_${channelId}.json`, JSON.stringify(data, null, 2));
 }
@@ -93,6 +103,9 @@ let seasonTeamsCache = null;
 const districtPointsCache = new Map();  // eventKey -> points payload (or null)
 const historicalScoreCache = new Map(); // `${team}-${year}` -> averaged score
 
+// Generic fetch wrapper that swallows HTTP and network errors and returns null
+// instead of throwing. TBA calls pass the TBA constant as options so the auth
+// header is included. Callers must treat a null return as "no data available".
 async function safeFetch(url, options = {}) {
   try {
     const res = await fetch(url, options);
@@ -107,7 +120,9 @@ async function safeFetch(url, options = {}) {
 
 const TBA = { headers: { 'X-TBA-Auth-Key': process.env.TBA_KEY } };
 const DEFAULT_YEAR = new Date().getFullYear();
-const CURRENT_YEAR = DEFAULT_YEAR; // compat alias, will be phased out by per-guild year
+// Compat alias kept for call sites not yet converted to per-guild getYear(data).
+// Do not remove — still referenced by scoring functions that lack a data object.
+const CURRENT_YEAR = DEFAULT_YEAR;
 
 // Permissions the bot needs to function correctly.
 // Used both for the permission check on guildCreate and to generate a correct invite link.
@@ -124,9 +139,14 @@ const REQUIRED_PERMISSIONS = [
 // Per-year cache for season teams
 let seasonTeamsCacheYear = null;
 
+// Gaussian error function — used to map a team's Worlds ranking to a smooth,
+// size-normalized points curve. Implemented via the Abramowitz & Stegun rational
+// approximation (Handbook of Mathematical Functions, formula 7.1.26), which is
+// accurate to ~1.5×10⁻⁷ and has no external dependencies.
 function erf(x) {
   const sign = x < 0 ? -1 : 1;
   const absX = Math.abs(x);
+  // Abramowitz & Stegun coefficients (formula 7.1.26):
   const a1 = 0.254829592;
   const a2 = -0.284496736;
   const a3 = 1.421413741;
@@ -192,6 +212,9 @@ function playerDisplay(id) {
   return `<@${id}>`;
 }
 
+// Returns a display string for a player ID suitable for Discord chat (mentions render
+// as @Name). CPU and manual players get plain text labels. Not suitable for CSV exports
+// — use playerNameForExport() instead, which resolves real Discord usernames.
 function playerName(id) {
   if (isBotPlayer(id)) return `CPU ${botNumber(id)}`;
   if (id.startsWith("MANUAL_")) return id.replace("MANUAL_", "");
@@ -221,6 +244,9 @@ function isAdmin(data, userId) {
 }
 
 // ---------------- SCORING ----------------
+// Returns a team's fantasy score for the regular season: sum of district points from
+// their first 2 qualifying events (type 0=Regional, 1=District). If only 1 event was
+// played the score is doubled to avoid penalizing teams with light schedules.
 async function getTeamSeasonScore(teamNumber, year = DEFAULT_YEAR) {
   const events = await safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/${year}`, TBA);
   if (!events?.length) return 0;
@@ -242,6 +268,9 @@ async function getTeamSeasonScore(teamNumber, year = DEFAULT_YEAR) {
   return total;
 }
 
+// Returns a team's fantasy score for the Championship (Worlds). Aggregates points
+// across all Worlds events (type 3=Division, 4=Championship Finals) the team played.
+// Scoring components: qual ranking (erf curve), alliance selection, playoff wins, awards.
 async function getTeamWorldsScore(teamNumber, year = DEFAULT_YEAR) {
   const events = await safeFetch(`https://www.thebluealliance.com/api/v3/team/frc${teamNumber}/events/${year}`, TBA);
   if (!events?.length) return 0;
@@ -261,10 +290,14 @@ async function getTeamWorldsScore(teamNumber, year = DEFAULT_YEAR) {
     const teamKey = `frc${teamNumber}`;
     const ranking = rankings?.rankings?.find(r => r.team_key === teamKey);
     if (ranking?.rank != null) {
+      // Qual ranking points: erf maps rank to a smooth curve centered at the midpoint,
+      // normalized by field size (worldsEvents.length) so a #1 rank in a 10-team division
+      // is worth the same as #1 in a 40-team division. Floor is ~2 pts, ceiling ~22 pts.
       const q = Math.ceil((10 / 1.07) * erf((worldsEvents.length - 2 * ranking.rank + 2) / (1.07 * worldsEvents.length)) + 12);
       total += q;
     }
 
+    // Alliance selection points: 1st pick = 16 pts, 2nd = 15 pts, ..., 0 pts beyond 17th.
     const allianceIndex = alliances?.findIndex(a => a.picks?.includes(teamKey) || a.captain?.key === teamKey);
     if (allianceIndex != null && allianceIndex >= 0) total += Math.max(0, 17 - (allianceIndex + 1));
 
@@ -274,6 +307,7 @@ async function getTeamWorldsScore(teamNumber, year = DEFAULT_YEAR) {
     const wonMatches = teamMatches.filter(m => m.alliances?.[m.winning_alliance]?.team_keys?.includes(teamKey));
     if (wonMatches.length) {
       const allianceWon = finals?.some(m => (m.alliances?.red?.team_keys?.includes(teamKey) || m.alliances?.blue?.team_keys?.includes(teamKey)) && m.alliances?.[m.winning_alliance]?.team_keys?.includes(teamKey));
+      // beta: 20 pts base for winning the finals alliance, 7 pts base for any other playoff win.
       const beta = allianceWon ? 20 : 7;
       total += Math.ceil(beta * (wonMatches.length / Math.max(1, teamMatches.filter(m => m.alliances?.[m.winning_alliance]?.team_keys?.includes(teamKey)).length)));
       if (allianceWon) total += Math.min(10, wonMatches.filter(m => m.comp_level === 'f').length * 5);
@@ -386,6 +420,9 @@ async function pickWithRandomness(scoredList, poolSize = 15, minRelativeStrength
   return chosen;
 }
 
+// Aggregates fantasy scores for all players and returns them sorted highest-first.
+// scoreFn is an async function (teamNumber) => number — pass getTeamSeasonScore
+// or getTeamWorldsScore (partially applied with year) depending on the phase.
 async function calcStandings(data, scoreFn) {
   const results = await Promise.all(
     data.players.map(async player => {
@@ -498,6 +535,8 @@ async function postRosterAnnouncement(data, guildId) {
 
 // Posts Week N standings to the guild's announcements channel.
 // weekNum is 0-indexed (TBA's week field); displayed as "Week N+1".
+// SIDE EFFECT: updates config.lastPostedWeek and writes guild_config_<guildId>.json
+// so the same week is never double-posted across restarts.
 async function postWeeklyStandings(guildId, weekNum, year) {
   const config = loadGuildConfig(guildId);
   if (!config.announcementChannelId || !config.draftChannelId) return;
@@ -1116,7 +1155,11 @@ function findOwner(data, team) {
 }
 
 // ---------------- CPU AUTO-PICK ----------------
-// Called recursively until a human's turn or draft ends
+// Executes one CPU pick for the current player, posts the announcement to Discord,
+// saves state, then calls itself recursively if the next player is also a CPU
+// (handles consecutive bot turns in a snake draft). Exits when it's a human's turn,
+// the draft is finished, or no teams remain in the pool.
+// SIDE EFFECT: mutates data, writes data_<channelId>.json, sends Discord messages.
 async function doBotPick(data, channelId, channel, guildId) {
   if (data.phase === "finished" || data.phase === "worlds_finished") return;
   const current = getCurrentPlayer(data);
@@ -1719,6 +1762,10 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: "🔒 Trading has been manually locked by an admin (`/trade lock`).", ephemeral: true });
       }
       if (guildConfig.tradeLockOverride !== false) {
+        // lastPostedWeek is 0-indexed; >= 4 means Week 5 (0–4) has been posted.
+        // Week 5 is chosen as the trade deadline because it's typically the last
+        // regular-season district event week before DCMP — trades after that point
+        // would let players game final standings with near-complete information.
         if (guildConfig.lastPostedWeek >= 4) {
           return interaction.reply({ content: "🔒 Trading is closed — the trade deadline passed after Week 5.", ephemeral: true });
         }
