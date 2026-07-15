@@ -2145,45 +2145,53 @@ client.on('interactionCreate', async (interaction) => {
 
       const [offerName, wantName] = await Promise.all([getTeamName(offering), getTeamName(wanting)]);
 
+      const isManualRecipient = theirOwner.startsWith('MANUAL_');
+
       // DM the recipient with interactive Accept/Decline buttons.
-      // Fire-and-forget — silently ignored if the user has DMs disabled.
-      client.users.fetch(theirOwner).then(async recipientUser => {
-        const senderName = interaction.member?.displayName ?? interaction.user.username;
-        await recipientUser.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle('🔄 Trade Proposal')
-              .setDescription(
-                `**${senderName}** wants to trade with you on **${interaction.guild.name}**.\n\n` +
-                `**They offer:** FRC ${offering} — ${offerName}\n` +
-                `**They want from you:** FRC ${wanting} — ${wantName}\n\n` +
-                `Use the buttons below, or run \`/trade accept\` / \`/trade decline\` in the server.`
+      // Skipped for manual players — they have no Discord account to DM.
+      if (!isManualRecipient) {
+        client.users.fetch(theirOwner).then(async recipientUser => {
+          const senderName = interaction.member?.displayName ?? interaction.user.username;
+          await recipientUser.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('🔄 Trade Proposal')
+                .setDescription(
+                  `**${senderName}** wants to trade with you on **${interaction.guild.name}**.\n\n` +
+                  `**They offer:** FRC ${offering} — ${offerName}\n` +
+                  `**They want from you:** FRC ${wanting} — ${wantName}\n\n` +
+                  `Use the buttons below, or run \`/trade accept\` / \`/trade decline\` in the server.`
+                )
+                .setColor(0xF0A500)
+            ],
+            components: [
+              new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`trade_accept_${guildId}_${channelId}`)
+                  .setLabel('✅ Accept Trade')
+                  .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                  .setCustomId(`trade_decline_${guildId}_${channelId}`)
+                  .setLabel('❌ Decline Trade')
+                  .setStyle(ButtonStyle.Danger)
               )
-              .setColor(0xF0A500)
-          ],
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`trade_accept_${guildId}_${channelId}`)
-                .setLabel('✅ Accept Trade')
-                .setStyle(ButtonStyle.Success),
-              new ButtonBuilder()
-                .setCustomId(`trade_decline_${guildId}_${channelId}`)
-                .setLabel('❌ Decline Trade')
-                .setStyle(ButtonStyle.Danger)
-            )
-          ]
-        });
-      }).catch(() => {}); // silently ignore if DMs are disabled
+            ]
+          });
+        }).catch(() => {}); // silently ignore if DMs are disabled
+      }
+
+      const recipientLine = isManualRecipient
+        ? `${playerDisplay(theirOwner)}: an admin must run \`/trade accept\` or \`/trade decline\` on their behalf.`
+        : `<@${theirOwner}>: run \`/trade accept\` to accept or \`/trade decline\` to decline *(a DM with buttons has been sent if your DMs are open)*.`;
 
       return interaction.reply({ embeds: [
         new EmbedBuilder()
           .setTitle("🔄 Trade Proposal")
           .setDescription(
-            `<@${userId}> wants to trade with <@${theirOwner}>\n\n` +
+            `${playerDisplay(userId)} wants to trade with ${playerDisplay(theirOwner)}\n\n` +
             `**Offering:** ${offerName}\n` +
             `**Requesting:** ${wantName}\n\n` +
-            `<@${theirOwner}>: run \`/trade accept\` to accept or \`/trade decline\` to decline *(a DM with buttons has been sent if your DMs are open)*.`
+            recipientLine
           )
           .setColor(0xF0A500)
       ]});
@@ -2207,7 +2215,18 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'trade' && interaction.options.getSubcommand() === 'accept') {
       const trade = data.pendingTrade;
       if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
-      if (userId !== trade.to) return interaction.reply({ content: "❌ This trade isn't directed at you.", ephemeral: true });
+
+      const recipientIsManual = trade.to.startsWith('MANUAL_');
+      // Discord players must accept their own trades; admins may accept on behalf of manual players.
+      const canAccept = userId === trade.to || (recipientIsManual && isEffectiveAdmin(data, interaction));
+      if (!canAccept) {
+        return interaction.reply({
+          content: recipientIsManual
+            ? "❌ Only an admin can accept a trade on behalf of a manual player."
+            : "❌ This trade isn't directed at you.",
+          ephemeral: true
+        });
+      }
 
       data.teamsDrafted[trade.from] = data.teamsDrafted[trade.from].filter(t => t !== trade.offering);
       data.teamsDrafted[trade.to]   = data.teamsDrafted[trade.to].filter(t => t !== trade.wanting);
@@ -2218,7 +2237,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const [offerName, wantName] = await Promise.all([getTeamName(trade.offering), getTeamName(trade.wanting)]);
       return interaction.reply(
-        `✅ **Trade accepted!**\n<@${trade.from}> receives **${wantName}**\n<@${trade.to}> receives **${offerName}**`
+        `✅ **Trade accepted!**\n${playerDisplay(trade.from)} receives **${wantName}**\n${playerDisplay(trade.to)} receives **${offerName}**`
       );
     }
 
@@ -2226,7 +2245,11 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'trade' && interaction.options.getSubcommand() === 'decline') {
       const trade = data.pendingTrade;
       if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
-      if (userId !== trade.to && userId !== trade.from) return interaction.reply({ content: "❌ You're not part of this trade.", ephemeral: true });
+
+      const recipientIsManual = trade.to.startsWith('MANUAL_');
+      const canDecline = userId === trade.to || userId === trade.from || (recipientIsManual && isEffectiveAdmin(data, interaction));
+      if (!canDecline) return interaction.reply({ content: "❌ You're not part of this trade.", ephemeral: true });
+
       data.pendingTrade = null;
       saveData(data, channelId);
       return interaction.reply("❌ Trade cancelled.");
