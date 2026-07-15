@@ -55,9 +55,9 @@ function generateDraftId() {
   return `${now.getMonth() + 1}${now.getDate()}`;
 }
 
-// Returns a trade ID: 7 random numbers 1–10 joined by dashes (e.g. "3-7-2-9-1-5-8").
+// Returns a trade ID: 7 random digits 0–9 with no separators (e.g. "3729158").
 function generateTradeId() {
-  return Array.from({ length: 7 }, () => Math.floor(Math.random() * 10) + 1).join('-');
+  return Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('');
 }
 
 // Loads per-channel draft state from disk. Fills in missing fields added in later
