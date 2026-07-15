@@ -55,6 +55,11 @@ function generateDraftId() {
   return `${now.getMonth() + 1}${now.getDate()}`;
 }
 
+// Returns a trade ID: 7 random numbers 1–10 joined by dashes (e.g. "3-7-2-9-1-5-8").
+function generateTradeId() {
+  return Array.from({ length: 7 }, () => Math.floor(Math.random() * 10) + 1).join('-');
+}
+
 // Loads per-channel draft state from disk. Fills in missing fields added in later
 // versions so old save files remain compatible. Returns freshData() on any error
 // (missing file, corrupt JSON, etc.) — the bot always starts from a clean slate
@@ -1488,6 +1493,8 @@ const HELP_CATEGORIES = [
       '`/draft hardreset` — Nuclear option: wipe all data + server config if things are bugged beyond repair *(Manage Server)*',
       '`/nuke` — Full server reconfiguration: wipes all draft data, resets config, recreates `#frc-fantasy-updates` *(Manage Server, two-step confirmation)*',
       '`/draft restore` — Rebuild draft state from this channel\'s message history (useful after a restart with missing data) *(admin)*',
+      '`/admin manualaccept [tradeid]` — Accept any pending trade by Trade ID *(admin)*',
+      '`/admin manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -2140,7 +2147,8 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      data.pendingTrade = { from: userId, offering, wanting, to: theirOwner };
+      const tradeId = generateTradeId();
+      data.pendingTrade = { from: userId, offering, wanting, to: theirOwner, tradeId };
       saveData(data, channelId);
 
       const [offerName, wantName] = await Promise.all([getTeamName(offering), getTeamName(wanting)]);
@@ -2160,6 +2168,7 @@ client.on('interactionCreate', async (interaction) => {
                   `**${senderName}** wants to trade with you on **${interaction.guild.name}**.\n\n` +
                   `**They offer:** FRC ${offering} — ${offerName}\n` +
                   `**They want from you:** FRC ${wanting} — ${wantName}\n\n` +
+                  `Trade ID: \`${tradeId}\`\n\n` +
                   `Use the buttons below, or run \`/trade accept\` / \`/trade decline\` in the server.`
                 )
                 .setColor(0xF0A500)
@@ -2181,7 +2190,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const recipientLine = isManualRecipient
-        ? `${playerDisplay(theirOwner)}: an admin must run \`/trade accept\` or \`/trade decline\` on their behalf.`
+        ? `${playerDisplay(theirOwner)}: an admin must run \`/admin trade manualaccept\` with Trade ID \`${tradeId}\` to accept.`
         : `<@${theirOwner}>: run \`/trade accept\` to accept or \`/trade decline\` to decline *(a DM with buttons has been sent if your DMs are open)*.`;
 
       return interaction.reply({ embeds: [
@@ -2191,6 +2200,7 @@ client.on('interactionCreate', async (interaction) => {
             `${playerDisplay(userId)} wants to trade with ${playerDisplay(theirOwner)}\n\n` +
             `**Offering:** ${offerName}\n` +
             `**Requesting:** ${wantName}\n\n` +
+            `Trade ID: \`${tradeId}\`\n\n` +
             recipientLine
           )
           .setColor(0xF0A500)
@@ -2217,16 +2227,13 @@ client.on('interactionCreate', async (interaction) => {
       if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
 
       const recipientIsManual = trade.to.startsWith('MANUAL_');
-      // Discord players must accept their own trades; admins may accept on behalf of manual players.
-      const canAccept = userId === trade.to || (recipientIsManual && isEffectiveAdmin(data, interaction));
-      if (!canAccept) {
+      if (recipientIsManual) {
         return interaction.reply({
-          content: recipientIsManual
-            ? "❌ Only an admin can accept a trade on behalf of a manual player."
-            : "❌ This trade isn't directed at you.",
+          content: `❌ This trade is directed at a manual player. An admin must use \`/admin trade manualaccept\` with Trade ID \`${trade.tradeId}\`.`,
           ephemeral: true
         });
       }
+      if (userId !== trade.to) return interaction.reply({ content: "❌ This trade isn't directed at you.", ephemeral: true });
 
       data.teamsDrafted[trade.from] = data.teamsDrafted[trade.from].filter(t => t !== trade.offering);
       data.teamsDrafted[trade.to]   = data.teamsDrafted[trade.to].filter(t => t !== trade.wanting);
@@ -2247,8 +2254,15 @@ client.on('interactionCreate', async (interaction) => {
       if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
 
       const recipientIsManual = trade.to.startsWith('MANUAL_');
-      const canDecline = userId === trade.to || userId === trade.from || (recipientIsManual && isEffectiveAdmin(data, interaction));
-      if (!canDecline) return interaction.reply({ content: "❌ You're not part of this trade.", ephemeral: true });
+      if (recipientIsManual && userId !== trade.from) {
+        return interaction.reply({
+          content: `❌ This trade is directed at a manual player. An admin must use \`/admin trade manualdecline\` with Trade ID \`${trade.tradeId}\`.`,
+          ephemeral: true
+        });
+      }
+      if (!recipientIsManual && userId !== trade.to && userId !== trade.from) {
+        return interaction.reply({ content: "❌ You're not part of this trade.", ephemeral: true });
+      }
 
       data.pendingTrade = null;
       saveData(data, channelId);
@@ -2967,6 +2981,40 @@ client.on('interactionCreate', async (interaction) => {
           )
           .setFooter({ text: 'Scores update live from The Blue Alliance' })
       ]});
+    }
+
+    // ── ADMIN MANUAL ACCEPT TRADE ─────────────────────────────────
+    if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'manualaccept') {
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
+      const trade = data.pendingTrade;
+      if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
+      const inputId = interaction.options.getString('tradeid');
+      if (inputId !== trade.tradeId) return interaction.reply({ content: `❌ Trade ID \`${inputId}\` doesn't match the pending trade (\`${trade.tradeId}\`).`, ephemeral: true });
+
+      data.teamsDrafted[trade.from] = data.teamsDrafted[trade.from].filter(t => t !== trade.offering);
+      data.teamsDrafted[trade.to]   = data.teamsDrafted[trade.to].filter(t => t !== trade.wanting);
+      data.teamsDrafted[trade.from].push(trade.wanting);
+      data.teamsDrafted[trade.to].push(trade.offering);
+      data.pendingTrade = null;
+      saveData(data, channelId);
+
+      const [offerName, wantName] = await Promise.all([getTeamName(trade.offering), getTeamName(trade.wanting)]);
+      return interaction.reply(
+        `✅ **Trade accepted!**\n${playerDisplay(trade.from)} receives **${wantName}**\n${playerDisplay(trade.to)} receives **${offerName}**`
+      );
+    }
+
+    // ── ADMIN MANUAL DECLINE TRADE ────────────────────────────────
+    if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'manualdecline') {
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
+      const trade = data.pendingTrade;
+      if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
+      const inputId = interaction.options.getString('tradeid');
+      if (inputId !== trade.tradeId) return interaction.reply({ content: `❌ Trade ID \`${inputId}\` doesn't match the pending trade (\`${trade.tradeId}\`).`, ephemeral: true });
+
+      data.pendingTrade = null;
+      saveData(data, channelId);
+      return interaction.reply("❌ Trade declined by admin.");
     }
 
     // ── ANNOUNCE ──────────────────────────────────────────────────
