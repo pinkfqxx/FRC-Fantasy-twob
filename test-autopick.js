@@ -27,7 +27,7 @@ async function main() {
   let remaining = [...scored]; // mirrors doBotPick's `available` shrinking as teams get drafted
   const picks = [];
   for (let i = 1; i <= 10; i++) {
-    const winner = await bot.pickWithRandomness(remaining, 10);
+    const winner = await bot.pickWithRandomness(remaining, 15);
     const name = await bot.getTeamName(winner.team).catch(() => `Team ${winner.team}`);
     picks.push(winner.team);
     remaining = remaining.filter(s => s.team !== winner.team); // this team can never be picked again

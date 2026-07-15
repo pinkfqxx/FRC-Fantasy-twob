@@ -337,12 +337,12 @@ async function getTeamHistoricalSeasonScore(teamNumber, currentYear) {
 // strength and pick randomly among them. "Comparable" is relative, not a fixed number —
 // a team has to score within `minRelativeStrength` (90%) of the best available score to
 // even enter the pool, capped at `poolSize` candidates. This matters because a flat
-// top-10-by-count pool can include teams far behind the leader once the score gap widens
+// top-15-by-count pool can include teams far behind the leader once the score gap widens
 // (e.g. early in a draft with a long tail of weaker teams); a relative floor keeps every
 // candidate close to the best option regardless of how the scores happen to be
 // distributed, and it naturally tightens or loosens as the pool of remaining teams changes
 // through the draft — no hardcoded score threshold to keep in sync with a given season/pool.
-async function pickWithRandomness(scoredList, poolSize = 10, minRelativeStrength = 0.9, label = 'Auto-pick') {
+async function pickWithRandomness(scoredList, poolSize = 15, minRelativeStrength = 0.9, label = 'Auto-pick') {
   if (!scoredList.length) return undefined; // callers must guard against an empty pool
   const sorted = [...scoredList].sort((a, b) => b.score - a.score);
   const topScore = sorted[0]?.score ?? 0;
@@ -1049,7 +1049,7 @@ async function performAutoSkip(guildId, channelId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = (await pickWithRandomness(scored, 10, 0.9, 'Grace-period auto-skip')).team;
+  const team = (await pickWithRandomness(scored, 15, 0.9, 'Grace-period auto-skip')).team;
 
   data.teamsDrafted[current].push(team);
   data.currentPick++;
@@ -1114,7 +1114,7 @@ async function doBotPick(data, channelId, channel, guildId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = (await pickWithRandomness(scored, 10, 0.9, `CPU ${botNumber(current)} pick`)).team;
+  const team = (await pickWithRandomness(scored, 15, 0.9, `CPU ${botNumber(current)} pick`)).team;
   data.teamsDrafted[current].push(team);
   data.currentPick++;
   data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
@@ -1842,7 +1842,7 @@ client.on('interactionCreate', async (interaction) => {
         ? t => getTeamWorldsScore(t, year)
         : t => getTeamHistoricalSeasonScore(t, year);
       const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-      const team = (await pickWithRandomness(scored, 10, 0.9, '/skip')).team;
+      const team = (await pickWithRandomness(scored, 15, 0.9, '/skip')).team;
 
       data.teamsDrafted[current].push(team);
       data.currentPick++;

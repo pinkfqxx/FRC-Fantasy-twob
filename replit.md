@@ -69,7 +69,7 @@ The bot is multi-server by design and does not need a hardcoded guild or channel
 Auto-picks don't just chase the single top-scoring team — they use a historical, randomized heuristic so the CPU doesn't feel robotic or overfit to one lucky season:
 - **Season phase:** each available team's score is the **average of its best-2-events score across the last 3 years** (current year + 2 prior), not just the current year. This is normalized per-year the same way live standings are (first 2 non-DCMP events, doubled if only 1 played) — so a team that plays 7 events and wins them all isn't unfairly favored over a team that plays 2 and wins them all; only years the team actually competed count toward its average.
 - **Worlds phase:** still uses the current year's live Worlds score (`getTeamWorldsScore`), since Worlds performance is a single-season event.
-- **Randomness:** instead of always taking the #1 team, the top 10 scoring teams are treated as "relatively similar" and one is picked at random from that group. Applies uniformly to CPU picks, `/skip`, and the pick-timer auto-skip.
+- **Randomness:** instead of always taking the #1 team, the top 15 scoring teams are treated as "relatively similar" and one is picked at random from that group. Applies uniformly to CPU picks, `/skip`, and the pick-timer auto-skip.
 
 ## Draft Flow
 
