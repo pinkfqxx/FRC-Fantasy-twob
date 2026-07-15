@@ -119,6 +119,24 @@ function saveGuildConfig(config, guildId) {
   fs.writeFileSync(`./guild_config_${guildId}.json`, JSON.stringify(config, null, 2));
 }
 
+// ---------------- USER PREFERENCES (per-user, cross-server) ----------------
+// Stored in user_prefs.json as { userId: { dmOnPick: bool, ... } }.
+function loadUserPrefs(userId) {
+  try {
+    const all = JSON.parse(fs.readFileSync('./user_prefs.json'));
+    return all[userId] || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveUserPrefs(userId, prefs) {
+  let all = {};
+  try { all = JSON.parse(fs.readFileSync('./user_prefs.json')); } catch {}
+  all[userId] = { ...(all[userId] || {}), ...prefs };
+  fs.writeFileSync('./user_prefs.json', JSON.stringify(all, null, 2));
+}
+
 // ---------------- TBA CACHE ----------------
 const teamNameCache = new Map();
 let seasonTeamsCache = null;
@@ -1121,7 +1139,17 @@ async function checkAndPostPredictions() {
       if (config.predictionMessageId) {
         try {
           const existing = await annChannel.messages.fetch(config.predictionMessageId);
-          await existing.edit({ embeds: [embed] });
+          // If the embed is more than 5 messages behind the latest, delete it and
+          // resend so it stays visible rather than getting buried in the channel.
+          const recent = await annChannel.messages.fetch({ limit: 6 });
+          if (recent.has(config.predictionMessageId)) {
+            await existing.edit({ embeds: [embed] });
+          } else {
+            await existing.delete().catch(() => {});
+            const msg = await annChannel.send({ embeds: [embed] });
+            config.predictionMessageId = msg.id;
+            saveGuildConfig(config, guildId);
+          }
         } catch {
           // Message was deleted — send fresh
           const msg = await annChannel.send({ embeds: [embed] });
@@ -1267,6 +1295,7 @@ async function performAutoSkip(guildId, channelId) {
     await doBotPick(data, channelId, ch, guildId);
   } else {
     startPickTimer(guildId, channelId);
+    maybeDmNextPlayer(next, data).catch(() => {});
   }
 }
 
@@ -1304,6 +1333,23 @@ function findOwner(data, team) {
     if (teams.includes(team)) return player;
   }
   return null;
+}
+
+// Sends a "your turn" DM to a player if they have dmOnPick enabled.
+// Fire-and-forget — silently swallows errors (DMs closed, fetch failed, etc.).
+async function maybeDmNextPlayer(playerId, data) {
+  if (!playerId || isBotPlayer(playerId) || playerId.startsWith('MANUAL_')) return;
+  const prefs = loadUserPrefs(playerId);
+  if (!prefs.dmOnPick) return;
+  try {
+    const user = await client.users.fetch(playerId);
+    const maxPicks = data.players.length * (data.teamsPerPlayer || 6);
+    const pickNum = data.currentPick + 1;
+    await user.send(
+      `🎯 **It's your turn to pick!** (Pick **#${pickNum}** of ${maxPicks})\n` +
+      `Head to your draft channel and use \`/pick team\` to make your selection.`
+    );
+  } catch { /* DMs closed or fetch failed — silently ignore */ }
 }
 
 // ---------------- CPU AUTO-PICK ----------------
@@ -1356,6 +1402,7 @@ async function doBotPick(data, channelId, channel, guildId) {
     await doBotPick(data, channelId, channel, guildId);
   } else {
     startPickTimer(guildId, channelId);
+    maybeDmNextPlayer(next, data).catch(() => {});
   }
 }
 
@@ -1629,10 +1676,6 @@ const HELP_CATEGORIES = [
       '`/draft restore` — Rebuild draft state from this channel\'s message history (useful after a restart with missing data) *(admin)*',
       '`/admin trade manualaccept [tradeid]` — Accept any pending trade by Trade ID *(admin)*',
       '`/admin trade manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
-      '`/config bottrading enable` / `disable` — Allow or block trades with CPU players *(admin)*',
-      '`/config botpicksforplayers enable` / `disable` — Allow or block auto-pick via `/pick skip` and timer expiry *(admin)*',
-      '`/config pick teamspickable [n]` — Set how many teams each player drafts (3–8, default 6) *(admin)*',
-      '`/config draft style [snake|popcorn]` — Snake reverses order each round; Popcorn reshuffles randomly each round *(admin)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -1660,6 +1703,23 @@ const HELP_CATEGORIES = [
       '`/trade lock [mode]` — Override the trade lock: `auto`, `locked`, or `open` *(admin)*',
       '`/trade accept` — Accept a pending trade',
       '`/trade decline` — Decline or cancel a trade',
+    ]
+  },
+  {
+    id: 'config',
+    emoji: '⚙️',
+    label: 'Settings & Config',
+    lines: [
+      '**Personal (anyone can use these):**',
+      '`/config pick dmonpick mode:enable` — DM you when it\'s your turn to pick',
+      '`/config pick dmonpick mode:disable` — Stop receiving turn DMs',
+      '**Server-wide (admin only):**',
+      '`/config bottrading enable` / `disable` — Allow or block trades with CPU players',
+      '`/config botpicksforplayers enable` / `disable` — Allow or block auto-pick via `/pick skip` and timer expiry',
+      '`/config pick teamspickable [n]` — Set how many teams each player drafts (3–8, default 6) — takes effect on next `/draft start`',
+      '`/config draft style [snake|popcorn]` — Snake reverses order each round; Popcorn reshuffles randomly each round — takes effect on next `/draft start`',
+      '`/draft timer [minutes]` — Set auto-skip timer per pick; `0` = disabled',
+      '`/trade lock [mode]` — Override the trade lock: `auto`, `locked`, or `open`',
     ]
   },
   {
@@ -2137,6 +2197,8 @@ client.on('interactionCreate', async (interaction) => {
 
         if (isBotPlayer(getCurrentPlayer(data))) {
           await doBotPick(data, channelId, interaction.channel, guildId);
+        } else {
+          maybeDmNextPlayer(getCurrentPlayer(data), data).catch(() => {});
         }
         return;
       }
@@ -2160,9 +2222,11 @@ client.on('interactionCreate', async (interaction) => {
         `🚀 **Season Draft Started!**\nTeams loaded: ${data.seasonTeams.length} · Style: **${styleLabel}** · **${data.teamsPerPlayer}** teams per player\nFirst pick: ${playerDisplay(first)}`
       );
 
-      // If CPU goes first, auto-pick immediately
+      // If CPU goes first, auto-pick immediately; otherwise DM the first human picker.
       if (isBotPlayer(first)) {
         await doBotPick(data, channelId, interaction.channel, guildId);
+      } else {
+        maybeDmNextPlayer(first, data).catch(() => {});
       }
       return;
     }
@@ -2210,6 +2274,7 @@ client.on('interactionCreate', async (interaction) => {
         await doBotPick(data, channelId, interaction.channel, guildId);
       } else {
         startPickTimer(guildId, channelId);
+        maybeDmNextPlayer(next, data).catch(() => {});
       }
       return;
     }
@@ -2258,6 +2323,7 @@ client.on('interactionCreate', async (interaction) => {
         await doBotPick(data, channelId, interaction.channel, guildId);
       } else {
         startPickTimer(guildId, channelId);
+        maybeDmNextPlayer(next, data).catch(() => {});
       }
       return;
     }
@@ -2574,6 +2640,7 @@ client.on('interactionCreate', async (interaction) => {
         await doBotPick(data, channelId, interaction.channel, guildId);
       } else {
         startPickTimer(guildId, channelId);
+        maybeDmNextPlayer(next, data).catch(() => {});
       }
       return;
     }
@@ -3220,6 +3287,18 @@ client.on('interactionCreate', async (interaction) => {
         content: enabling
           ? "✅ Auto-pick **enabled** — `/pick skip` works and the bot will auto-pick for players whose timer expires."
           : "🚫 Auto-pick **disabled** — players must always pick manually. `/pick skip` is blocked and the timer will only warn, not auto-pick.",
+        ephemeral: true
+      });
+    }
+
+    // ── CONFIG PICK DMONPICK (personal — no admin required) ──────
+    if (interaction.commandName === 'config' && interaction.options.getSubcommandGroup() === 'pick' && interaction.options.getSubcommand() === 'dmonpick') {
+      const enabling = interaction.options.getString('mode') === 'enable';
+      saveUserPrefs(userId, { dmOnPick: enabling });
+      return interaction.reply({
+        content: enabling
+          ? "🔔 Got it — you'll receive a DM when it's your turn to pick."
+          : "🔕 Got it — you won't receive turn DMs anymore.",
         ephemeral: true
       });
     }

@@ -225,13 +225,24 @@ const fullCommands = [
       .setDescription('Configure pick settings')
       .addSubcommand(sub => sub
         .setName('teamspickable')
-        .setDescription('Number of teams each player drafts (3–8, default 6)')
+        .setDescription('Number of teams each player drafts (3–8, default 6) — admin only')
         .addIntegerOption(opt => opt
           .setName('count')
           .setDescription('Teams per player (3–8)')
           .setRequired(true)
           .setMinValue(3)
-          .setMaxValue(8))))
+          .setMaxValue(8)))
+      .addSubcommand(sub => sub
+        .setName('dmonpick')
+        .setDescription('Get a DM when it\'s your turn to pick (personal — anyone can use this)')
+        .addStringOption(opt => opt
+          .setName('mode')
+          .setDescription('Enable or disable turn DMs')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Enable — DM me when it\'s my turn', value: 'enable' },
+            { name: 'Disable — no turn DMs (default)', value: 'disable' }
+          ))))
     .addSubcommandGroup(group => group
       .setName('draft')
       .setDescription('Configure draft style')

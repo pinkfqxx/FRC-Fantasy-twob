@@ -69,6 +69,7 @@ Commands are grouped into a handful of top-level commands with subcommands (rath
 | `/stats podium` / `/stats schedule` / `/stats export` | Fantasy podium / upcoming events / CSV export |
 | `/season current` / `/season set year:<n>` | Show or override the active FRC season year |
 | `/admin setchannel` / `addadmin` / `addmanualplayer` / `announce` | Server admin configuration |
+| `/config pick dmonpick mode:<enable\|disable>` | Personal: opt in/out of a DM notification when it's your turn to pick *(anyone)* |
 | `/config pick teamspickable count:<n>` | Set how many teams each player drafts (3–8, default 6) — takes effect on next `/draft start` *(admin)* |
 | `/config draft style mode:<snake\|popcorn>` | Snake reverses pick order each round; Popcorn reshuffles randomly each round — takes effect on next `/draft start` *(admin)* |
 | `/help`, `/rules` | Command reference and scoring rules (unchanged, top-level) |
