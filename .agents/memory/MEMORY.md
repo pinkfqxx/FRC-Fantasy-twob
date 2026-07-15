@@ -1,2 +1,3 @@
 - [Discord bot CSV/text exports](discord-bot-csv-exports.md) — mention markup renders fine in-chat but is raw garbage in exports; resolve real usernames on export paths.
 - [Discord bot offline testing](discord-bot-offline-testing.md) — guard `client.login` behind `require.main`, export `client`, and emit fake `interactionCreate` events to test safely without a second gateway session.
+- [/nuke command maintenance](nuke-command-maintenance.md) — update /nuke whenever new significant server state is added so it resets cleanly on old installs.

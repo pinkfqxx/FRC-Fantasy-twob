@@ -163,11 +163,7 @@ const fullCommands = [
     .addSubcommand(sub => sub
       .setName('announce')
       .setDescription('Post a custom message to #frc-fantasy-updates (admin only)')
-      .addStringOption(opt => opt.setName('message').setDescription('Message to post').setRequired(true).setMaxLength(2000)))
-    .addSubcommand(sub => sub
-      .setName('setup')
-      .setDescription('Recreate the announcements channel and wipe all draft data (Manage Server)')
-      .addStringOption(opt => opt.setName('confirm').setDescription('Type SETUP to confirm — this wipes all draft data for this server').setRequired(true))),
+      .addStringOption(opt => opt.setName('message').setDescription('Message to post').setRequired(true).setMaxLength(2000))),
 
   new SlashCommandBuilder()
     .setName('season')
@@ -179,6 +175,14 @@ const fullCommands = [
       .setName('set')
       .setDescription('Set the FRC season year for TBA data (admin only)')
       .addIntegerOption(opt => opt.setName('year').setDescription('e.g. 2027').setRequired(true))),
+
+  new SlashCommandBuilder()
+    .setName('nuke')
+    .setDescription('Reconfigure this server from scratch — wipes all draft data (Manage Server)')
+    .addStringOption(opt => opt
+      .setName('confirm')
+      .setDescription('Type NUKE to proceed to the confirmation step')
+      .setRequired(true)),
 
   new SlashCommandBuilder().setName('help').setDescription('Show a full command reference'),
   new SlashCommandBuilder().setName('rules').setDescription('Show the fantasy scoring rules'),

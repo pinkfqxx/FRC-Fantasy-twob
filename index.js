@@ -1392,6 +1392,7 @@ const HELP_CATEGORIES = [
       '`/pick undo [team]` — Undo a pick *(admin)*',
       '`/draft reset` — Fully reset the draft *(admin)*',
       '`/draft hardreset` — Nuclear option: wipe all data + server config if things are bugged beyond repair *(Manage Server)*',
+      '`/nuke` — Full server reconfiguration: wipes all draft data, resets config, recreates `#frc-fantasy-updates` *(Manage Server, two-step confirmation)*',
       '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
       '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
     ]
@@ -1487,6 +1488,139 @@ function buildHelpCategoryComponents() {
 
 // ---------------- COMMAND HANDLER ----------------
 client.on('interactionCreate', async (interaction) => {
+  // ── /nuke confirmation buttons ───────────────────────────────
+  // nuke_confirm: user clicked "Confirm Nuke" after the /nuke warning embed.
+  // nuke_cancel:  user clicked "Cancel" — dismiss the warning.
+  // Both run outside the draft-channel guard since the server may be misconfigured.
+  if (interaction.isButton() && (interaction.customId === 'nuke_confirm' || interaction.customId === 'nuke_cancel')) {
+    if (interaction.customId === 'nuke_cancel') {
+      return interaction.update({ content: '❌ Nuke cancelled.', embeds: [], components: [] });
+    }
+
+    // Re-verify permission on the button click — the ephemeral message is only
+    // visible to the invoker, but it's good practice to check again.
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      return interaction.update({ content: '❌ You need **Manage Server** permission.', embeds: [], components: [] });
+    }
+
+    await interaction.deferUpdate();
+    const nukeGuildId  = interaction.guildId;
+    const nukeChannelId = interaction.channelId;
+    const steps = [];
+
+    // ── 1. Clear any running pick timer ───────────────────────────
+    clearPickTimer(nukeGuildId);
+    steps.push('⏱️ Pick timer cleared.');
+
+    // ── 2. Wipe all draft data files belonging to this guild ───────
+    // Iterates every data_<channelId>.json on disk; deletes the ones whose
+    // channel resolves to this guild so stale files from old channels go too.
+    const wipedChannels = [];
+    for (const file of fs.readdirSync('.')) {
+      if (!/^data_\d+\.json$/.test(file)) continue;
+      const candidateId = file.slice('data_'.length, -'.json'.length);
+      try {
+        const ch = await client.channels.fetch(candidateId).catch(() => null);
+        if (ch && ch.guildId === nukeGuildId) {
+          fs.unlinkSync(file);
+          wipedChannels.push(candidateId);
+        }
+      } catch { /* skip inaccessible channels */ }
+    }
+    const currentDataFile = `./data_${nukeChannelId}.json`;
+    if (fs.existsSync(currentDataFile) && !wipedChannels.includes(nukeChannelId)) fs.unlinkSync(currentDataFile);
+    steps.push(`🗑️ Draft data wiped (${Math.max(wipedChannels.length, 1)} file(s) removed).`);
+
+    // ── 3. Delete stale #frc-fantasy-updates if it still exists ───
+    const oldConfig = loadGuildConfig(nukeGuildId);
+    if (oldConfig.announcementChannelId) {
+      const oldAnnCh = await interaction.guild.channels.fetch(oldConfig.announcementChannelId).catch(() => null);
+      if (oldAnnCh) {
+        await oldAnnCh.delete('FRC Fantasy /nuke — recreating announcements channel').catch(() => {});
+        steps.push('🗑️ Old `#frc-fantasy-updates` channel deleted.');
+      }
+    }
+
+    // ── 4. Reset guild config ──────────────────────────────────────
+    // NOTE FOR FUTURE AGENTS: if new fields are added to guild_config, make sure
+    // they are either covered by the fresh-defaults in loadGuildConfig(), or
+    // explicitly reset here. The goal is that after /nuke the server is in the
+    // exact same state as a brand-new install.
+    const configFile = `./guild_config_${nukeGuildId}.json`;
+    if (fs.existsSync(configFile)) fs.unlinkSync(configFile);
+    steps.push('🔄 Server config reset (channel bindings, timer, trade lock, prediction message).');
+
+    // ── 5. Permission check ────────────────────────────────────────
+    const botMember = interaction.guild.members.me;
+    const missingPerms = botMember
+      ? REQUIRED_PERMISSIONS.filter(p => !botMember.permissions.has(p))
+      : REQUIRED_PERMISSIONS;
+
+    let permNote = '';
+    if (missingPerms.length) {
+      const missingList = missingPerms.map(p => `• **${PERMISSION_NAMES[p] ?? String(p)}**`).join('\n');
+      const inviteLink = client.generateInvite({ scopes: ['bot', 'applications.commands'], permissions: REQUIRED_PERMISSIONS });
+      permNote = `\n\n⚠️ **Missing permissions — some features won't work until these are granted:**\n${missingList}\n\nKick and re-invite the bot with all permissions: <${inviteLink}>`;
+      steps.push('⚠️ Missing permissions detected (see below).');
+    } else {
+      steps.push('✅ All required permissions are present.');
+    }
+
+    // ── 6. Recreate #frc-fantasy-updates ──────────────────────────
+    try {
+      const annChannel = await interaction.guild.channels.create({
+        name: 'frc-fantasy-updates',
+        type: ChannelType.GuildText,
+        topic: 'FRC Fantasy Draft announcements and weekly standings — managed by the bot',
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone,
+            deny: [PermissionFlagsBits.SendMessages],
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]
+          },
+          {
+            id: client.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.ReadMessageHistory
+            ]
+          }
+        ]
+      });
+
+      const freshConfig = loadGuildConfig(nukeGuildId); // blank defaults — file was just deleted
+      freshConfig.announcementChannelId = annChannel.id;
+      saveGuildConfig(freshConfig, nukeGuildId);
+
+      await annChannel.send(
+        '🔄 **FRC Fantasy Bot has been reconfigured for this server.**\n\n' +
+        'This channel will receive:\n' +
+        '• 📋 Full draft rosters when a draft completes\n' +
+        '• 📅 Weekly standings as FRC event results come in\n' +
+        '• 🔮 Live Statbotics predictions (updated every 3 hours during active events)\n' +
+        '• ⚠️ Bot error alerts\n\n' +
+        'A server admin should run `/admin setchannel` in whichever channel you want to use for draft commands.'
+      );
+      steps.push('✅ `#frc-fantasy-updates` recreated successfully.');
+    } catch (err) {
+      steps.push('❌ Could not create `#frc-fantasy-updates` — check that the bot has **Manage Channels** permission.');
+      console.error('nuke: channel creation failed:', err);
+    }
+
+    return interaction.editReply({
+      content:
+        `☢️ **Server nuke complete.**\n\n` +
+        steps.join('\n') +
+        `\n\n**Next steps:** Run \`/admin setchannel\` in your draft channel, then \`/draft status open:true\` to begin.` +
+        permNote,
+      embeds: [],
+      components: []
+    });
+  }
+
   // ── /help category buttons ──────────────────────────────────
   if (interaction.isButton() && interaction.customId.startsWith('help_')) {
     try {
@@ -1508,6 +1642,46 @@ client.on('interactionCreate', async (interaction) => {
   const guildId = interaction.guildId;
   const channelId = interaction.channelId;
   const userId = interaction.user.id;
+
+  // ── NUKE ───────────────────────────────────────────────────────
+  // First confirmation layer: verify Manage Server permission and the typed "NUKE"
+  // string, then post an ephemeral warning embed with Confirm/Cancel buttons (second
+  // layer). The actual destructive work runs in the nuke_confirm button handler above.
+  // Placed before the draft-channel guard so it works even when the server is
+  // misconfigured and the draft channel is unknown or inaccessible.
+  if (interaction.commandName === 'nuke') {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      return interaction.reply({ content: '❌ You need **Manage Server** permission to run `/nuke`.', ephemeral: true });
+    }
+    if (interaction.options.getString('confirm') !== 'NUKE') {
+      return interaction.reply({
+        content: '⚠️ Type `NUKE` (all caps) as the `confirm` argument to proceed to the confirmation step.',
+        ephemeral: true
+      });
+    }
+
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('☢️ Confirm Server Nuke')
+          .setColor(0xFF0000)
+          .setDescription(
+            '**This will permanently wipe the following from this server:**\n\n' +
+            '• All draft data (players, picks, rosters, pick log, standings)\n' +
+            '• Server config (draft channel binding, pick timer, trade lock)\n' +
+            '• The `#frc-fantasy-updates` channel *(will be recreated fresh)*\n\n' +
+            '**This cannot be undone.** Click **Confirm Nuke** to proceed.'
+          )
+      ],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('nuke_confirm').setLabel('☢️ Confirm Nuke').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId('nuke_cancel').setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+        )
+      ],
+      ephemeral: true
+    });
+  }
 
   // ── DRAFT CHANNEL GUARD ───────────────────────────────────────
   const guildConfig = loadGuildConfig(guildId);
@@ -2525,134 +2699,6 @@ client.on('interactionCreate', async (interaction) => {
           .setTimestamp()
       ]});
       return interaction.reply({ content: "✅ Announcement posted.", ephemeral: true });
-    }
-
-    // ── SETUP (reconfigure server from scratch) ─────────────────
-    // Wipes all draft data and guild config, deletes the stale announcements channel,
-    // checks permissions, and recreates #frc-fantasy-updates fresh. Gated on Discord's
-    // native Manage Server permission so it works even when the bot's own admin list is
-    // corrupted or simply missing (as on servers running an older bot version).
-    if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'setup') {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        return interaction.reply({ content: "❌ You need **Manage Server** permission to run setup.", ephemeral: true });
-      }
-      if (interaction.options.getString('confirm') !== 'SETUP') {
-        return interaction.reply({
-          content: "⚠️ This wipes **all draft data** for this server, resets the server config, and recreates `#frc-fantasy-updates`.\n\nType `SETUP` (all caps) to confirm.",
-          ephemeral: true
-        });
-      }
-
-      await interaction.deferReply();
-      const steps = [];
-
-      // ── 1. Clear any running pick timer ───────────────────────
-      clearPickTimer(guildId);
-      steps.push('⏱️ Pick timer cleared.');
-
-      // ── 2. Wipe all draft data files that belong to this guild ─
-      // Iterates every data_<channelId>.json on disk and deletes ones whose channel
-      // resolves to this guild, so stale files from old draft channels are cleaned up too.
-      const wipedChannels = [];
-      for (const file of fs.readdirSync('.')) {
-        if (!/^data_\d+\.json$/.test(file)) continue;
-        const candidateId = file.slice('data_'.length, -'.json'.length);
-        try {
-          const ch = await client.channels.fetch(candidateId).catch(() => null);
-          if (ch && ch.guildId === guildId) {
-            fs.unlinkSync(file);
-            wipedChannels.push(candidateId);
-          }
-        } catch { /* skip inaccessible channels */ }
-      }
-      // Always ensure the current channel's file is gone even if the fetch above failed.
-      const currentDataFile = `./data_${channelId}.json`;
-      if (fs.existsSync(currentDataFile) && !wipedChannels.includes(channelId)) fs.unlinkSync(currentDataFile);
-      steps.push(`🗑️ Draft data wiped (${Math.max(wipedChannels.length, 1)} data file(s) removed).`);
-
-      // ── 3. Delete stale announcements channel if it still exists
-      const oldConfig = loadGuildConfig(guildId);
-      if (oldConfig.announcementChannelId) {
-        const oldAnnCh = await interaction.guild.channels.fetch(oldConfig.announcementChannelId).catch(() => null);
-        if (oldAnnCh) {
-          await oldAnnCh.delete('FRC Fantasy /admin setup — recreating announcements channel').catch(() => {});
-          steps.push('🗑️ Old `#frc-fantasy-updates` channel deleted.');
-        }
-      }
-
-      // ── 4. Reset guild config ───────────────────────────────────
-      const configFile = `./guild_config_${guildId}.json`;
-      if (fs.existsSync(configFile)) fs.unlinkSync(configFile);
-      steps.push('🔄 Server config reset (channel bindings, timer, trade lock).');
-
-      // ── 5. Permission check ─────────────────────────────────────
-      const botMember = interaction.guild.members.me;
-      const missingPerms = botMember
-        ? REQUIRED_PERMISSIONS.filter(p => !botMember.permissions.has(p))
-        : REQUIRED_PERMISSIONS;
-
-      let permNote = '';
-      if (missingPerms.length) {
-        const missingList = missingPerms.map(p => `• **${PERMISSION_NAMES[p] ?? String(p)}**`).join('\n');
-        const inviteLink = client.generateInvite({ scopes: ['bot', 'applications.commands'], permissions: REQUIRED_PERMISSIONS });
-        permNote = `\n\n⚠️ **Missing permissions — some features won't work until these are granted:**\n${missingList}\n\nKick and re-invite the bot with all permissions: <${inviteLink}>`;
-        steps.push('⚠️ Missing permissions detected (see below).');
-      } else {
-        steps.push('✅ All required permissions are present.');
-      }
-
-      // ── 6. Recreate #frc-fantasy-updates ────────────────────────
-      let annChannel = null;
-      try {
-        annChannel = await interaction.guild.channels.create({
-          name: 'frc-fantasy-updates',
-          type: ChannelType.GuildText,
-          topic: 'FRC Fantasy Draft announcements and weekly standings — managed by the bot',
-          permissionOverwrites: [
-            {
-              id: interaction.guild.roles.everyone,
-              deny: [PermissionFlagsBits.SendMessages],
-              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]
-            },
-            {
-              id: client.user.id,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.EmbedLinks,
-                PermissionFlagsBits.AttachFiles,
-                PermissionFlagsBits.ReadMessageHistory
-              ]
-            }
-          ]
-        });
-
-        // Save the new channel ID to a fresh guild config.
-        const freshConfig = loadGuildConfig(guildId); // returns blank defaults since we wiped the file
-        freshConfig.announcementChannelId = annChannel.id;
-        saveGuildConfig(freshConfig, guildId);
-
-        await annChannel.send(
-          '🔄 **FRC Fantasy Bot has been reconfigured for this server.**\n\n' +
-          'This channel will receive:\n' +
-          '• 📋 Full draft rosters when a draft completes\n' +
-          '• 📅 Weekly standings as FRC event results come in\n' +
-          '• 🔮 Live Statbotics predictions (updated every 3 hours during active events)\n' +
-          '• ⚠️ Bot error alerts\n\n' +
-          'A server admin should run `/admin setchannel` in whichever channel you want to use for draft commands.'
-        );
-        steps.push(`✅ \`#frc-fantasy-updates\` recreated successfully.`);
-      } catch (err) {
-        steps.push('❌ Could not create `#frc-fantasy-updates` — check that the bot has **Manage Channels** permission.');
-        console.error('setup: channel creation failed:', err);
-      }
-
-      return interaction.editReply(
-        `🛠️ **Server setup complete.**\n\n` +
-        steps.join('\n') +
-        `\n\n**Next steps:** Run \`/admin setchannel\` in your draft channel, then \`/draft status open:true\` to begin.` +
-        permNote
-      );
     }
 
   } catch (err) {
