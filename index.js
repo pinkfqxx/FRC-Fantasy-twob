@@ -1359,10 +1359,12 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase, a
     lineupModifier = Math.max(relativeChange / FULL_SWING, -1) * 0.20;
   }
 
-  // Each repeated proposal of this exact trade to this bot adds a -7% penalty.
-  const repeatPenalty = (attemptNumber - 1) * 0.07;
+  // Each repeated proposal multiplies the final chance by 0.75 — hits harder on
+  // already-high chances than a flat subtraction would.
+  const REPEAT_MULTIPLIER = 0.75;
+  const repeatFactor = Math.pow(REPEAT_MULTIPLIER, attemptNumber - 1);
 
-  const finalChance = Math.max(0, Math.min(1, BASE_CHANCE + lineupModifier - repeatPenalty));
+  const finalChance = Math.max(0, Math.min(1, (BASE_CHANCE + lineupModifier) * repeatFactor));
   const roll        = Math.random();
   const accepted    = roll < finalChance;
 
@@ -1372,7 +1374,7 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase, a
   console.log(`🤖 [${label}]   Relative change                  : ${(delta / ref * 100).toFixed(1)}%`);
   console.log(`🤖 [${label}]   Base acceptance chance           : ${(BASE_CHANCE * 100).toFixed(0)}%`);
   console.log(`🤖 [${label}]   Lineup impact modifier           : ${lineupModifier >= 0 ? '+' : ''}${(lineupModifier * 100).toFixed(2)}%  (cap: ${delta >= 0 ? '+30%' : '-20%'})`);
-  console.log(`🤖 [${label}]   Repeat penalty (attempt ${attemptNumber})     : -${(repeatPenalty * 100).toFixed(0)}%  (${attemptNumber - 1} × 7%)`);
+  console.log(`🤖 [${label}]   Repeat multiplier (attempt ${attemptNumber})   : ×${repeatFactor.toFixed(4)}  (0.75^${attemptNumber - 1})`);
   console.log(`🤖 [${label}]   Final acceptance chance          : ${(finalChance * 100).toFixed(2)}%`);
   console.log(`🤖 [${label}] ── Roll ${'─'.repeat(41)}`);
   console.log(`🤖 [${label}]   Roll  : ${(roll * 100).toFixed(2)}`);
@@ -2225,7 +2227,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // ── BOT TRADE: evaluate and resolve immediately ───────────────
       if (isBotPlayer(theirOwner)) {
-        const MAX_BOT_TRADE_ATTEMPTS = 3;
+        const MAX_BOT_TRADE_ATTEMPTS = 2;
         const tradeKey = `${offering}-${wanting}`;
         if (!data.botTradeAttempts[theirOwner]) data.botTradeAttempts[theirOwner] = {};
         const priorAttempts = data.botTradeAttempts[theirOwner][tradeKey] || 0;
