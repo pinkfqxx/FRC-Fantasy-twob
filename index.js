@@ -1399,7 +1399,7 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase, a
   console.log(`🤖 [${label}]   Result: ${accepted ? '✅ ACCEPTED' : '❌ DECLINED'}`);
   console.log(`🤖 [${label}] ${'─'.repeat(48)}\n`);
 
-  return { accepted, baseChance: BASE_CHANCE, lineupModifier, repeatPenalty, finalChance, roll, offeringScore, wantingScore };
+  return { accepted, baseChance: BASE_CHANCE, lineupModifier, repeatFactor, finalChance, roll, offeringScore, wantingScore };
 }
 
 // ---------------- GLOBAL ERROR SAFETY ----------------
