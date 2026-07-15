@@ -1598,6 +1598,10 @@ client.on('guildCreate', async (guild) => {
       '• ⚠️ Bot error alerts\n\n' +
       'A server admin should run `/admin setchannel` in whichever channel you want to use for draft commands.'
     );
+    await channel.send({
+      embeds: [buildHelpHomeEmbed().setFooter({ text: 'Use the buttons below to browse all commands.' })],
+      components: buildHelpHomeComponents()
+    });
   } catch (err) {
     console.error('guildCreate channel setup error:', err);
 
@@ -1648,15 +1652,15 @@ const HELP_CATEGORIES = [
     emoji: '🔧',
     label: 'Draft Setup',
     lines: [
-      '`/draft join` — Join the fantasy draft',
-      '`/draft addbot` — Add a CPU auto-picker (up to 3)',
-      '`/draft removebot` — Remove the most recently added CPU player',
-      '`/admin addmanualplayer [name]` — Add a non-Discord player *(admin)*',
-      '`/draft status [open]` — Open or close the draft *(admin)*',
-      '`/admin setchannel` — Set this channel as the draft channel *(admin)*',
-      '`/season set [year]` — Override the FRC season year *(admin)*',
       '`/admin addadmin [@user]` — Promote a player to admin',
+      '`/admin addmanualplayer [name]` — Add a non-Discord player *(admin)*',
+      '`/admin setchannel` — Set this channel as the draft channel *(admin)*',
+      '`/draft addbot` — Add a CPU auto-picker (up to 3)',
+      '`/draft join` — Join the fantasy draft',
+      '`/draft removebot` — Remove the most recently added CPU player',
       '`/draft start [mode]` — Start the season or worlds draft *(admin)*',
+      '`/draft status [open]` — Open or close the draft *(admin)*',
+      '`/season set [year]` — Override the FRC season year *(admin)*',
     ]
   },
   {
@@ -1664,20 +1668,19 @@ const HELP_CATEGORIES = [
     emoji: '🎯',
     label: 'During the Draft',
     lines: [
-      '`/pick team [team]` — Pick a team on your turn',
-      '`/pick manual [player] [team]` — Pick for a manual player *(admin)*',
-      '`/pick skip` — Auto-pick the best available team for your turn',
-      '`/draft order` — Show the upcoming pick order',
-      '`/draft timer [minutes]` — Set auto-skip timer; `0` = disabled *(admin)*',
-      '`/pick undo [team]` — Undo a pick *(admin)*',
-      '`/draft reset` — Fully reset the draft *(admin)*',
-      '`/draft hardreset` — Nuclear option: wipe all data + server config if things are bugged beyond repair *(Manage Server)*',
-      '`/nuke` — Full server reconfiguration: wipes all draft data, resets config, recreates `#frc-fantasy-updates` *(Manage Server, two-step confirmation)*',
-      '`/draft restore` — Rebuild draft state from this channel\'s message history (useful after a restart with missing data) *(admin)*',
       '`/admin trade manualaccept [tradeid]` — Accept any pending trade by Trade ID *(admin)*',
       '`/admin trade manualdecline [tradeid]` — Decline any pending trade by Trade ID *(admin)*',
-      '*CPU auto-picks and auto-skips pick from a pool of similarly-strong available teams, not always the single best one.*',
-      '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if it\'s 25 min or less) before being auto-picked.*',
+      '`/draft hardreset` — Nuclear option: wipe all data + server config if things are bugged beyond repair *(Manage Server)*',
+      '`/draft order` — Show the upcoming pick order',
+      '`/draft reset` — Fully reset the draft *(admin)*',
+      '`/draft restore` — Rebuild draft state from this channel\'s message history (useful after a restart with missing data) *(admin)*',
+      '`/nuke` — Full server reconfiguration: wipes all draft data, resets config, recreates `#frc-fantasy-updates` *(Manage Server, two-step confirmation)*',
+      '`/pick manual [player] [team]` — Pick for a manual player *(admin)*',
+      '`/pick skip` — Auto-pick the best available team for your turn',
+      '`/pick team [team]` — Pick a team on your turn',
+      '`/pick undo [team]` — Undo a pick *(admin)*',
+      '*CPU auto-picks pick from a pool of similarly-strong available teams, not always the single best one.*',
+      '*If the pick timer expires, the player is pinged and gets a grace period (10 min, or half the timer if ≤ 25 min) before being auto-picked.*',
     ]
   },
   {
@@ -1685,12 +1688,12 @@ const HELP_CATEGORIES = [
     emoji: '🏆',
     label: 'Season',
     lines: [
-      '`/stats standings` — Live fantasy standings with scores',
-      '`/stats myteams` — Your personal team scores *(private)*',
-      '`/stats schedule` — Upcoming events for all drafted teams',
-      '`/team score [team]` — Full point breakdown for any FRC team',
       '`/stats breakdown [player]` — Detailed breakdown for ALL, an @mention, or a manual player\'s name',
+      '`/stats myteams` — Your personal team scores *(private)*',
       '`/stats podium` — Fantasy podium',
+      '`/stats schedule` — Upcoming events for all drafted teams',
+      '`/stats standings` — Live fantasy standings with scores',
+      '`/team score [team]` — Full point breakdown for any FRC team',
     ]
   },
   {
@@ -1699,10 +1702,10 @@ const HELP_CATEGORIES = [
     label: 'Trades',
     lines: [
       '*Trades close after Week 5, and 24h after the worlds draft finishes.*',
-      '`/trade propose [offer] [request]` — Propose a team swap',
-      '`/trade lock [mode]` — Override the trade lock: `auto`, `locked`, or `open` *(admin)*',
       '`/trade accept` — Accept a pending trade',
       '`/trade decline` — Decline or cancel a trade',
+      '`/trade lock [mode]` — Override the trade lock: `auto`, `locked`, or `open` *(admin)*',
+      '`/trade propose [offer] [request]` — Propose a team swap',
     ]
   },
   {
@@ -1711,13 +1714,13 @@ const HELP_CATEGORIES = [
     label: 'Settings & Config',
     lines: [
       '**Personal (anyone can use these):**',
-      '`/config pick dmonpick mode:enable` — DM you when it\'s your turn to pick',
+      '`/config pick dmonpick mode:enable` — Receive a DM when it\'s your turn to pick',
       '`/config pick dmonpick mode:disable` — Stop receiving turn DMs',
       '**Server-wide (admin only):**',
-      '`/config bottrading enable` / `disable` — Allow or block trades with CPU players',
       '`/config botpicksforplayers enable` / `disable` — Allow or block auto-pick via `/pick skip` and timer expiry',
-      '`/config pick teamspickable [n]` — Set how many teams each player drafts (3–8, default 6) — takes effect on next `/draft start`',
+      '`/config bottrading enable` / `disable` — Allow or block trades with CPU players',
       '`/config draft style [snake|popcorn]` — Snake reverses order each round; Popcorn reshuffles randomly each round — takes effect on next `/draft start`',
+      '`/config pick teamspickable [n]` — Set how many teams each player drafts (3–8, default 6) — takes effect on next `/draft start`',
       '`/draft timer [minutes]` — Set auto-skip timer per pick; `0` = disabled',
       '`/trade lock [mode]` — Override the trade lock: `auto`, `locked`, or `open`',
     ]
@@ -1727,12 +1730,12 @@ const HELP_CATEGORIES = [
     emoji: '🔍',
     label: 'Teams & Info',
     lines: [
-      '`/stats teams` — All fantasy teams and their owners',
-      '`/stats roster` — Clean roster list (no scores)',
-      '`/team search [name]` — Search for a team by name',
-      '`/team identify [number]` — Look up a team by number',
       '`/rules` — Show scoring rules',
       '`/season current` — Show the active FRC season year',
+      '`/stats roster` — Clean roster list (no scores)',
+      '`/stats teams` — All fantasy teams and their owners',
+      '`/team identify [number]` — Look up a team by number',
+      '`/team search [name]` — Search for a team by name',
     ]
   },
   {
@@ -1740,9 +1743,9 @@ const HELP_CATEGORIES = [
     emoji: '📤',
     label: 'Export & Announcements',
     lines: [
-      '`/stats export` — Export draft data as two CSV files',
       '`/admin announce [message]` — Post to #frc-fantasy-updates *(admin)*',
       '`/admin setup` — Reconfigure server from scratch: recreate announcements channel, wipe draft data, check permissions *(Manage Server)*',
+      '`/stats export` — Export draft data as two CSV files',
     ]
   },
 ];
@@ -1904,6 +1907,10 @@ client.on('interactionCreate', async (interaction) => {
         '• ⚠️ Bot error alerts\n\n' +
         'A server admin should run `/admin setchannel` in whichever channel you want to use for draft commands.'
       );
+      await annChannel.send({
+        embeds: [buildHelpHomeEmbed().setFooter({ text: 'Use the buttons below to browse all commands.' })],
+        components: buildHelpHomeComponents()
+      });
       steps.push('✅ `#frc-fantasy-updates` recreated successfully.');
     } catch (err) {
       steps.push('❌ Could not create `#frc-fantasy-updates` — check that the bot has **Manage Channels** permission.');
