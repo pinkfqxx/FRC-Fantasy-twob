@@ -44,8 +44,15 @@ function freshData() {
     pickLog: [],
     admins: [],
     year: null,
-    worldsFinishedAt: null
+    worldsFinishedAt: null,
+    draftId: null
   };
+}
+
+// Returns a draft ID string in MMMDD format (e.g. "327" for March 27, "1201" for December 1).
+function generateDraftId() {
+  const now = new Date();
+  return `${now.getMonth() + 1}${now.getDate()}`;
 }
 
 // Loads per-channel draft state from disk. Fills in missing fields added in later
@@ -59,6 +66,7 @@ function loadData(channelId) {
     if (!d.admins) d.admins = d.players.length ? [d.players[0]] : [];
     if (!d.year) d.year = null;
     if (!('worldsFinishedAt' in d)) d.worldsFinishedAt = null;
+    if (!('draftId' in d)) d.draftId = null;
     return d;
   } catch {
     return freshData();
@@ -770,6 +778,14 @@ function applyRecoveredMessage(state, content, timestamp) {
     return 'reset';
   }
 
+  // A new draft opening always supersedes whatever came before — treat it as a
+  // boundary so the replay starts fresh from this point, keeping only the most
+  // recent draft's history. Also captures the draftId for the new state.
+  const openMatch = content.match(/^✅ \*\*Draft is now OPEN\*\* · ID: \*\*(\d+)\*\*/);
+  if (openMatch) {
+    return `new_draft:${openMatch[1]}`;
+  }
+
   let m;
 
   if ((m = content.match(/^✅ <@(\d+)> has joined the draft!$/))) {
@@ -923,7 +939,16 @@ async function rebuildDataFromChannelHistory(channelId) {
   let state = freshData();
   for (const msg of collected) {
     const result = applyRecoveredMessage(state, msg.content, msg.createdTimestamp);
-    if (result === 'reset') state = freshData();
+    if (result === 'reset') {
+      state = freshData();
+    } else if (typeof result === 'string' && result.startsWith('new_draft:')) {
+      // A new draft was opened — discard everything before it and start fresh,
+      // capturing the draftId embedded in the open message.
+      const id = result.slice('new_draft:'.length);
+      state = freshData();
+      state.draftId = id;
+      state.draftOpen = true;
+    }
   }
 
   if (state._needsSeasonTeams) state.seasonTeams = await loadSeasonTeams(getYear(state));
@@ -1853,8 +1878,9 @@ client.on('interactionCreate', async (interaction) => {
       }
       if (setToOpen) {
         data.draftOpen = true;
+        data.draftId = generateDraftId();
         saveData(data, channelId);
-        return interaction.reply("✅ **Draft is now OPEN**\nPlayers can now join using `/draft join` or add a CPU with `/draft addbot`");
+        return interaction.reply(`✅ **Draft is now OPEN** · ID: **${data.draftId}**\nPlayers can now join using \`/draft join\` or add a CPU with \`/draft addbot\``);
       } else {
         saveData(freshData(), channelId);
         // Bulk delete the bot's own recent messages in this channel
