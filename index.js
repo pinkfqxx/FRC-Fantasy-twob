@@ -338,14 +338,30 @@ async function getTeamHistoricalSeasonScore(teamNumber, currentYear) {
 // candidate close to the best option regardless of how the scores happen to be
 // distributed, and it naturally tightens or loosens as the pool of remaining teams changes
 // through the draft — no hardcoded score threshold to keep in sync with a given season/pool.
-function pickWithRandomness(scoredList, poolSize = 10, minRelativeStrength = 0.9) {
+async function pickWithRandomness(scoredList, poolSize = 10, minRelativeStrength = 0.9, label = 'Auto-pick') {
   if (!scoredList.length) return undefined; // callers must guard against an empty pool
   const sorted = [...scoredList].sort((a, b) => b.score - a.score);
   const topScore = sorted[0]?.score ?? 0;
   const candidates = sorted
     .filter(s => s.score >= topScore * minRelativeStrength)
     .slice(0, poolSize);
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+
+  // Verbose logging: only the shortlist (top `poolSize`, not every evaluated team) plus
+  // the randomly chosen winner, so this stays readable even when hundreds of teams were scored.
+  try {
+    const names = await Promise.all(candidates.map(c => getTeamName(c.team).catch(() => `Team ${c.team}`)));
+    console.log(`\n🎲 [${label}] Scored ${scoredList.length} available team(s) — shortlist is the top ${candidates.length} within ${(minRelativeStrength * 100).toFixed(0)}% of the best score (${topScore.toFixed(1)} pts):`);
+    candidates.forEach((c, i) => {
+      const marker = c.team === chosen.team ? '➡️ ' : '   ';
+      console.log(`${marker}${i + 1}. FRC ${c.team} — ${names[i]} — ${c.score.toFixed(1)} pts`);
+    });
+    console.log(`   ✅ Randomly picked: FRC ${chosen.team} — ${names[candidates.indexOf(chosen)]}\n`);
+  } catch (err) {
+    console.log(`🎲 [${label}] Auto-pick log failed (non-fatal): ${err.message}`);
+  }
+
+  return chosen;
 }
 
 async function calcStandings(data, scoreFn) {
@@ -1021,7 +1037,7 @@ async function performAutoSkip(guildId, channelId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = pickWithRandomness(scored).team;
+  const team = (await pickWithRandomness(scored, 10, 0.9, 'Grace-period auto-skip')).team;
 
   data.teamsDrafted[current].push(team);
   data.currentPick++;
@@ -1085,7 +1101,7 @@ async function doBotPick(data, channelId, channel, guildId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = pickWithRandomness(scored).team;
+  const team = (await pickWithRandomness(scored, 10, 0.9, 'CPU pick')).team;
   data.teamsDrafted[BOT_PLAYER_ID].push(team);
   data.currentPick++;
   data.pickLog.push({ player: BOT_PLAYER_ID, team, pickIndex: data.currentPick - 1 });
@@ -1811,7 +1827,7 @@ client.on('interactionCreate', async (interaction) => {
         ? t => getTeamWorldsScore(t, year)
         : t => getTeamHistoricalSeasonScore(t, year);
       const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-      const team = pickWithRandomness(scored).team;
+      const team = (await pickWithRandomness(scored, 10, 0.9, '/skip')).team;
 
       data.teamsDrafted[current].push(team);
       data.currentPick++;
