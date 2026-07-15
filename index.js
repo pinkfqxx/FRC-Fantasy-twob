@@ -2984,7 +2984,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // ── ADMIN MANUAL ACCEPT TRADE ─────────────────────────────────
-    if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'manualaccept') {
+    if (interaction.commandName === 'admin' && interaction.options.getSubcommandGroup() === 'trade' && interaction.options.getSubcommand() === 'manualaccept') {
       if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
       const trade = data.pendingTrade;
       if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });
@@ -3005,7 +3005,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // ── ADMIN MANUAL DECLINE TRADE ────────────────────────────────
-    if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'manualdecline') {
+    if (interaction.commandName === 'admin' && interaction.options.getSubcommandGroup() === 'trade' && interaction.options.getSubcommand() === 'manualdecline') {
       if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
       const trade = data.pendingTrade;
       if (!trade) return interaction.reply({ content: "❌ There's no pending trade.", ephemeral: true });

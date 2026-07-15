@@ -168,14 +168,17 @@ const fullCommands = [
       .setName('announce')
       .setDescription('Post a custom message to #frc-fantasy-updates (admin only)')
       .addStringOption(opt => opt.setName('message').setDescription('Message to post').setRequired(true).setMaxLength(2000)))
-    .addSubcommand(sub => sub
-      .setName('manualaccept')
-      .setDescription('Accept any pending trade by Trade ID (admin only)')
-      .addStringOption(opt => opt.setName('tradeid').setDescription('Trade ID shown in the trade proposal (e.g. 3-7-2-9-1-5-8)').setRequired(true)))
-    .addSubcommand(sub => sub
-      .setName('manualdecline')
-      .setDescription('Decline any pending trade by Trade ID (admin only)')
-      .addStringOption(opt => opt.setName('tradeid').setDescription('Trade ID shown in the trade proposal (e.g. 3-7-2-9-1-5-8)').setRequired(true))),
+    .addSubcommandGroup(group => group
+      .setName('trade')
+      .setDescription('Admin trade controls')
+      .addSubcommand(sub => sub
+        .setName('manualaccept')
+        .setDescription('Accept any pending trade by Trade ID (admin only)')
+        .addStringOption(opt => opt.setName('tradeid').setDescription('Trade ID shown in the trade proposal').setRequired(true)))
+      .addSubcommand(sub => sub
+        .setName('manualdecline')
+        .setDescription('Decline any pending trade by Trade ID (admin only)')
+        .addStringOption(opt => opt.setName('tradeid').setDescription('Trade ID shown in the trade proposal').setRequired(true)))),
 
   new SlashCommandBuilder()
     .setName('season')
