@@ -1187,11 +1187,12 @@ client.on('guildCreate', async (guild) => {
   }
 
   // ── 2. Channel creation ────────────────────────────────────────────────────
+  let channel = null;
   try {
     const config = loadGuildConfig(guild.id);
     if (config.announcementChannelId) return; // already set up from a previous join
 
-    const channel = await guild.channels.create({
+    channel = await guild.channels.create({
       name: 'frc-fantasy-updates',
       type: ChannelType.GuildText,
       topic: 'FRC Fantasy Draft announcements and weekly standings — managed by the bot',
@@ -1200,6 +1201,18 @@ client.on('guildCreate', async (guild) => {
           id: guild.roles.everyone,
           deny: [PermissionFlagsBits.SendMessages],
           allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]
+        },
+        {
+          // Without an explicit allow for the bot's own role, it inherits the
+          // @everyone deny above and can't post its own announcements/standings.
+          id: client.user.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.EmbedLinks,
+            PermissionFlagsBits.AttachFiles,
+            PermissionFlagsBits.ReadMessageHistory
+          ]
         }
       ]
     });
@@ -1219,19 +1232,31 @@ client.on('guildCreate', async (guild) => {
   } catch (err) {
     console.error('guildCreate channel setup error:', err);
 
-    // If channel creation failed, DM the owner so they know setup is incomplete.
     const owner = await guild.fetchOwner().catch(() => null);
     if (owner) {
       const inviteLink = client.generateInvite({
         scopes: ['bot', 'applications.commands'],
         permissions: REQUIRED_PERMISSIONS,
       });
-      await owner.send(
-        `⚠️ **FRC Fantasy Bot — Setup Failed in "${guild.name}"**\n\n` +
-        `The bot couldn't create the \`#frc-fantasy-updates\` announcements channel. ` +
-        `This is usually a permissions issue.\n\n` +
-        `Please kick the bot and re-invite it using this link:\n<${inviteLink}>`
-      ).catch(() => {});
+      if (channel) {
+        // The channel itself exists — only the welcome message (or the permission
+        // overwrites on it) failed. Don't tell the owner the channel is missing.
+        await owner.send(
+          `⚠️ **FRC Fantasy Bot — Partial Setup Issue in "${guild.name}"**\n\n` +
+          `The \`#${channel.name}\` channel was created, but the bot couldn't post its ` +
+          `welcome message there (likely missing \`Send Messages\`/\`Embed Links\` permission ` +
+          `in that specific channel).\n\n` +
+          `Check the channel's permissions for the bot's role, or re-invite it using this link ` +
+          `to reset permissions server-wide:\n<${inviteLink}>`
+        ).catch(() => {});
+      } else {
+        await owner.send(
+          `⚠️ **FRC Fantasy Bot — Setup Failed in "${guild.name}"**\n\n` +
+          `The bot couldn't create the \`#frc-fantasy-updates\` announcements channel. ` +
+          `This is usually a permissions issue.\n\n` +
+          `Please kick the bot and re-invite it using this link:\n<${inviteLink}>`
+        ).catch(() => {});
+      }
     }
   }
 });
