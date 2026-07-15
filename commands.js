@@ -20,6 +20,9 @@ const fullCommands = [
       .setName('addbot')
       .setDescription('Add a CPU player to the draft that auto-picks randomly (up to 3)'))
     .addSubcommand(sub => sub
+      .setName('removebot')
+      .setDescription('Remove the most recently added CPU player from the draft'))
+    .addSubcommand(sub => sub
       .setName('start')
       .setDescription('Start the season or worlds draft')
       .addStringOption(opt => opt

@@ -394,11 +394,19 @@ async function getTeamHistoricalSeasonScore(teamNumber, currentYear) {
 // candidate close to the best option regardless of how the scores happen to be
 // distributed, and it naturally tightens or loosens as the pool of remaining teams changes
 // through the draft — no hardcoded score threshold to keep in sync with a given season/pool.
-async function pickWithRandomness(scoredList, poolSize = 15, minRelativeStrength = 0.9, label = 'Auto-pick') {
+//
+// `skipTop`: skip this many of the highest-scoring teams before building the candidate pool.
+// Used to avoid always converging on the same consensus top teams — the top 5 are excluded
+// so the random selection draws from a more interesting spread of strong-but-not-obvious picks.
+async function pickWithRandomness(scoredList, poolSize = 15, minRelativeStrength = 0.9, label = 'Auto-pick', skipTop = 0) {
   if (!scoredList.length) return undefined; // callers must guard against an empty pool
   const sorted = [...scoredList].sort((a, b) => b.score - a.score);
-  const topScore = sorted[0]?.score ?? 0;
-  const candidates = sorted
+  // Skip the top `skipTop` teams, then build the candidate pool from what remains.
+  const afterSkip = sorted.slice(skipTop);
+  // If skipping emptied the list (fewer teams left than skipTop), fall back to the full sorted list.
+  const eligible = afterSkip.length ? afterSkip : sorted;
+  const topScore = eligible[0]?.score ?? 0;
+  const candidates = eligible
     .filter(s => s.score >= topScore * minRelativeStrength)
     .slice(0, poolSize);
   const chosen = candidates[Math.floor(Math.random() * candidates.length)];
@@ -407,7 +415,8 @@ async function pickWithRandomness(scoredList, poolSize = 15, minRelativeStrength
   // the randomly chosen winner, so this stays readable even when hundreds of teams were scored.
   try {
     const names = await Promise.all(candidates.map(c => getTeamName(c.team).catch(() => `Team ${c.team}`)));
-    console.log(`\n🎲 [${label}] Scored ${scoredList.length} available team(s) — shortlist is the top ${candidates.length} within ${(minRelativeStrength * 100).toFixed(0)}% of the best score (${topScore.toFixed(1)} pts):`);
+    const skipNote = skipTop > 0 ? `, skipping top ${skipTop}` : '';
+    console.log(`\n🎲 [${label}] Scored ${scoredList.length} available team(s)${skipNote} — shortlist is the top ${candidates.length} within ${(minRelativeStrength * 100).toFixed(0)}% of the best eligible score (${topScore.toFixed(1)} pts):`);
     candidates.forEach((c, i) => {
       const marker = c.team === chosen.team ? '➡️ ' : '   ';
       console.log(`${marker}${i + 1}. FRC ${c.team} — ${names[i]} — ${c.score.toFixed(1)} pts`);
@@ -1106,7 +1115,7 @@ async function performAutoSkip(guildId, channelId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = (await pickWithRandomness(scored, 15, 0.9, 'Grace-period auto-skip')).team;
+  const team = (await pickWithRandomness(scored, 15, 0.9, 'Grace-period auto-skip', 5)).team;
 
   data.teamsDrafted[current].push(team);
   data.currentPick++;
@@ -1175,7 +1184,7 @@ async function doBotPick(data, channelId, channel, guildId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = (await pickWithRandomness(scored, 15, 0.9, `CPU ${botNumber(current)} pick`)).team;
+  const team = (await pickWithRandomness(scored, 15, 0.9, `CPU ${botNumber(current)} pick`, 5)).team;
   data.teamsDrafted[current].push(team);
   data.currentPick++;
   data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
@@ -1361,6 +1370,7 @@ const HELP_CATEGORIES = [
     lines: [
       '`/draft join` — Join the fantasy draft',
       '`/draft addbot` — Add a CPU auto-picker (up to 3)',
+      '`/draft removebot` — Remove the most recently added CPU player',
       '`/admin addmanualplayer [name]` — Add a non-Discord player *(admin)*',
       '`/draft status [open]` — Open or close the draft *(admin)*',
       '`/admin setchannel` — Set this channel as the draft channel *(admin)*',
@@ -1588,6 +1598,18 @@ client.on('interactionCreate', async (interaction) => {
       data.players.push(nextBotId);
       saveData(data, channelId);
       return interaction.reply(`🤖 **CPU ${botNumber(nextBotId)} added to the draft!** It will auto-pick randomly when it's its turn. (${currentBots.length + 1}/${MAX_BOTS} CPU players)`);
+    }
+
+    // ── REMOVE BOT ─────────────────────────────────────────────────
+    if (interaction.commandName === 'draft' && interaction.options.getSubcommand() === 'removebot') {
+      if (!data.draftOpen) return interaction.reply("❌ Draft joining is currently closed.");
+      const currentBots = data.players.filter(isBotPlayer);
+      if (!currentBots.length) return interaction.reply("🤖 There are no CPU players in the draft to remove.");
+      // Remove the highest-numbered bot (the most recently added one).
+      const toRemove = currentBots[currentBots.length - 1];
+      data.players = data.players.filter(p => p !== toRemove);
+      saveData(data, channelId);
+      return interaction.reply(`🤖 **CPU ${botNumber(toRemove)} removed from the draft.** (${currentBots.length - 1}/${MAX_BOTS} CPU players)`);
     }
 
     // ── START DRAFT (season or worlds) ─────────────────────────────
@@ -1898,7 +1920,7 @@ client.on('interactionCreate', async (interaction) => {
         ? t => getTeamWorldsScore(t, year)
         : t => getTeamHistoricalSeasonScore(t, year);
       const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-      const team = (await pickWithRandomness(scored, 15, 0.9, '/skip')).team;
+      const team = (await pickWithRandomness(scored, 15, 0.9, '/skip', 5)).team;
 
       data.teamsDrafted[current].push(team);
       data.currentPick++;
