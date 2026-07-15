@@ -3681,5 +3681,6 @@
   ],
   "year": 2024,
   "worldsFinishedAt": null,
-  "draftId": null
+  "draftId": null,
+  "botTradeAttempts": {}
 }

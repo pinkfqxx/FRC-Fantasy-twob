@@ -45,7 +45,8 @@ function freshData() {
     admins: [],
     year: null,
     worldsFinishedAt: null,
-    draftId: null
+    draftId: null,
+    botTradeAttempts: {}  // { botId: { "offering-wanting": attemptCount } }
   };
 }
 
@@ -72,6 +73,7 @@ function loadData(channelId) {
     if (!d.year) d.year = null;
     if (!('worldsFinishedAt' in d)) d.worldsFinishedAt = null;
     if (!('draftId' in d)) d.draftId = null;
+    if (!('botTradeAttempts' in d)) d.botTradeAttempts = {};
     return d;
   } catch {
     return freshData();
@@ -1308,7 +1310,7 @@ async function doBotPick(data, channelId, channel, guildId) {
 // Uses the same scoring as auto-pick (historical season avg or live worlds score).
 // Base acceptance: 45%. Improved lineup: up to +30%. Hurt lineup: up to -20%.
 // Logs verbosely so admins can follow the reasoning in the console.
-async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
+async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase, attemptNumber) {
   const isWorlds = phase === 'worlds' || phase === 'worlds_finished';
   const scoreFn = isWorlds
     ? t => getTeamWorldsScore(t, year)
@@ -1320,6 +1322,7 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
   console.log(`\n🤖 [${label}] ${'─'.repeat(48)}`);
   console.log(`🤖 [${label}] Incoming trade proposal — resolving immediately.`);
   console.log(`🤖 [${label}]   Phase: ${phase} | Scoring: ${isWorlds ? 'live Worlds (TBA)' : 'historical season avg (3yr)'}`);
+  console.log(`🤖 [${label}]   Attempt number : ${attemptNumber} of 3`);
   console.log(`🤖 [${label}]   Bot gives up : FRC ${wantingTeam}`);
   console.log(`🤖 [${label}]   Bot receives : FRC ${offeringTeam}`);
   console.log(`🤖 [${label}] Fetching scores from TBA...`);
@@ -1345,19 +1348,21 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
 
   // A 30% score difference relative to the giving team is treated as a "full swing" —
   // so the modifier reaches its cap (+30% or -20%) when the received team scores
-  // ~30% more or less than the one being given up. This is calibrated to the realistic
-  // spread between teams in the same draft pool (100% differences never occur in practice).
+  // ~30% more or less than the one being given up.
   const FULL_SWING = 0.30;
   const relativeChange = delta / ref;
 
-  let modifier;
+  let lineupModifier;
   if (delta >= 0) {
-    modifier = Math.min(relativeChange / FULL_SWING, 1) * 0.30;
+    lineupModifier = Math.min(relativeChange / FULL_SWING, 1) * 0.30;
   } else {
-    modifier = Math.max(relativeChange / FULL_SWING, -1) * 0.20;
+    lineupModifier = Math.max(relativeChange / FULL_SWING, -1) * 0.20;
   }
 
-  const finalChance = Math.max(0, Math.min(1, BASE_CHANCE + modifier));
+  // Each repeated proposal of this exact trade to this bot adds a -7% penalty.
+  const repeatPenalty = (attemptNumber - 1) * 0.07;
+
+  const finalChance = Math.max(0, Math.min(1, BASE_CHANCE + lineupModifier - repeatPenalty));
   const roll        = Math.random();
   const accepted    = roll < finalChance;
 
@@ -1366,7 +1371,8 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
   console.log(`🤖 [${label}]   Reference value (giving team)    : ${ref.toFixed(2)} pts`);
   console.log(`🤖 [${label}]   Relative change                  : ${(delta / ref * 100).toFixed(1)}%`);
   console.log(`🤖 [${label}]   Base acceptance chance           : ${(BASE_CHANCE * 100).toFixed(0)}%`);
-  console.log(`🤖 [${label}]   Lineup impact modifier           : ${modifier >= 0 ? '+' : ''}${(modifier * 100).toFixed(2)}%  (cap: ${delta >= 0 ? '+30%' : '-20%'})`);
+  console.log(`🤖 [${label}]   Lineup impact modifier           : ${lineupModifier >= 0 ? '+' : ''}${(lineupModifier * 100).toFixed(2)}%  (cap: ${delta >= 0 ? '+30%' : '-20%'})`);
+  console.log(`🤖 [${label}]   Repeat penalty (attempt ${attemptNumber})     : -${(repeatPenalty * 100).toFixed(0)}%  (${attemptNumber - 1} × 7%)`);
   console.log(`🤖 [${label}]   Final acceptance chance          : ${(finalChance * 100).toFixed(2)}%`);
   console.log(`🤖 [${label}] ── Roll ${'─'.repeat(41)}`);
   console.log(`🤖 [${label}]   Roll  : ${(roll * 100).toFixed(2)}`);
@@ -1374,7 +1380,7 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
   console.log(`🤖 [${label}]   Result: ${accepted ? '✅ ACCEPTED' : '❌ DECLINED'}`);
   console.log(`🤖 [${label}] ${'─'.repeat(48)}\n`);
 
-  return { accepted, baseChance: BASE_CHANCE, modifier, finalChance, roll, offeringScore, wantingScore };
+  return { accepted, baseChance: BASE_CHANCE, lineupModifier, repeatPenalty, finalChance, roll, offeringScore, wantingScore };
 }
 
 // ---------------- GLOBAL ERROR SAFETY ----------------
@@ -2219,10 +2225,27 @@ client.on('interactionCreate', async (interaction) => {
 
       // ── BOT TRADE: evaluate and resolve immediately ───────────────
       if (isBotPlayer(theirOwner)) {
+        const MAX_BOT_TRADE_ATTEMPTS = 3;
+        const tradeKey = `${offering}-${wanting}`;
+        if (!data.botTradeAttempts[theirOwner]) data.botTradeAttempts[theirOwner] = {};
+        const priorAttempts = data.botTradeAttempts[theirOwner][tradeKey] || 0;
+
+        if (priorAttempts >= MAX_BOT_TRADE_ATTEMPTS) {
+          return interaction.reply({
+            content: `❌ **${playerDisplay(theirOwner)} won't consider this trade anymore.** You've already proposed FRC ${offering} for FRC ${wanting} ${MAX_BOT_TRADE_ATTEMPTS} times.`,
+            ephemeral: true
+          });
+        }
+
+        // Record the attempt before evaluating so the penalty applies to this proposal.
+        data.botTradeAttempts[theirOwner][tradeKey] = priorAttempts + 1;
+        const attemptNumber = priorAttempts + 1;
+        const attemptsLeft  = MAX_BOT_TRADE_ATTEMPTS - attemptNumber;
+
         await interaction.deferReply();
         const year = getYear(data);
         const [offerName, wantName] = await Promise.all([getTeamName(offering), getTeamName(wanting)]);
-        const result = await evaluateBotTrade(theirOwner, offering, wanting, year, data.phase);
+        const result = await evaluateBotTrade(theirOwner, offering, wanting, year, data.phase, attemptNumber);
 
         if (result.accepted) {
           data.teamsDrafted[userId]     = (data.teamsDrafted[userId]     || []).filter(t => t !== offering);
@@ -2237,9 +2260,14 @@ client.on('interactionCreate', async (interaction) => {
             `*Acceptance chance: ${(result.finalChance * 100).toFixed(1)}% · Roll: ${(result.roll * 100).toFixed(1)}*`
           );
         } else {
+          saveData(data, channelId);
+          const attemptsNote = attemptsLeft > 0
+            ? `You can propose this trade ${attemptsLeft} more time${attemptsLeft === 1 ? '' : 's'} (−7% each time).`
+            : `This was your last attempt — ${playerDisplay(theirOwner)} will no longer consider this trade.`;
           return interaction.editReply(
-            `❌ **${playerDisplay(theirOwner)} declined the trade.**\n\n` +
-            `*Acceptance chance was ${(result.finalChance * 100).toFixed(1)}% · Roll: ${(result.roll * 100).toFixed(1)}*`
+            `❌ **${playerDisplay(theirOwner)} declined the trade.**\n` +
+            `*Acceptance chance was ${(result.finalChance * 100).toFixed(1)}% · Roll: ${(result.roll * 100).toFixed(1)}*\n\n` +
+            attemptsNote
           );
         }
       }
