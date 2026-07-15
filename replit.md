@@ -38,6 +38,7 @@ The bot is multi-server by design and does not need a hardcoded guild or channel
 | `/draftstatus open:true` | Open the draft for players to join |
 | `/draftstatus open:false` | Close and fully reset the draft |
 | `/join_draft` | Join the fantasy draft (while open) |
+| `/addbot` | Add a CPU auto-picker (up to 3 per draft) |
 | `/start_draft` | Start the season draft (host only) |
 | `/start_worlds_draft` | Start the Worlds draft — auto-calculates season standings and reverses order (host only) |
 | `/pick team:<number>` | Pick an FRC team by number |

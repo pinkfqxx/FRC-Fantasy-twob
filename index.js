@@ -20,7 +20,11 @@ const client = new Client({
 });
 
 // Special ID for the CPU bot player
-const BOT_PLAYER_ID = "BOT_PLAYER";
+const BOT_PLAYER_ID = "BOT_PLAYER"; // legacy alias for CPU slot #1, kept for backward compatibility with saved drafts
+const BOT_PLAYER_IDS = ["BOT_PLAYER", "BOT_PLAYER_2", "BOT_PLAYER_3"];
+const MAX_BOTS = BOT_PLAYER_IDS.length;
+function isBotPlayer(id) { return BOT_PLAYER_IDS.includes(id); }
+function botNumber(id) { return BOT_PLAYER_IDS.indexOf(id) + 1; } // 1-based; 0 if not a bot
 
 // ---------------- DATA (per-server) ----------------
 function freshData() {
@@ -183,13 +187,13 @@ async function loadWorldsTeams(year = DEFAULT_YEAR) {
 
 // ---------------- DISPLAY HELPERS ----------------
 function playerDisplay(id) {
-  if (id === BOT_PLAYER_ID) return "🤖 **CPU**";
+  if (isBotPlayer(id)) return `🤖 **CPU ${botNumber(id)}**`;
   if (id.startsWith("MANUAL_")) return `👤 **${id.replace("MANUAL_", "")}**`;
   return `<@${id}>`;
 }
 
 function playerName(id) {
-  if (id === BOT_PLAYER_ID) return "CPU";
+  if (isBotPlayer(id)) return `CPU ${botNumber(id)}`;
   if (id.startsWith("MANUAL_")) return id.replace("MANUAL_", "");
   return `<@${id}>`;
 }
@@ -612,7 +616,11 @@ function resolvePlayerIdentityFromText(text) {
   if (!text) return null;
   const parts = text.split('→').map(s => s.trim());
   const target = parts[parts.length - 1];
-  if (/🤖/.test(target) || /\bCPU\b/.test(target)) return BOT_PLAYER_ID;
+  const botMatch = target.match(/🤖.*?CPU\s*(\d+)?/) || target.match(/\bCPU\s*(\d+)?\b/);
+  if (botMatch) {
+    const num = botMatch[1] ? parseInt(botMatch[1], 10) : 1;
+    return BOT_PLAYER_IDS[num - 1] || BOT_PLAYER_ID;
+  }
   const manualMatch = target.match(/👤\s*\*\*(.+?)\*\*/);
   if (manualMatch) return `MANUAL_${manualMatch[1]}`;
   const mentionMatch = target.match(/<@(\d+)>/);
@@ -658,8 +666,9 @@ function applyRecoveredMessage(state, content, timestamp) {
     return;
   }
 
-  if (/^🤖 \*\*CPU player added to the draft!\*\*/.test(content)) {
-    ensureRecoveredPlayer(state, BOT_PLAYER_ID);
+  if ((m = content.match(/^🤖 \*\*CPU(?: (\d+))?(?: player)? added to the draft!\*\*/))) {
+    const num = m[1] ? parseInt(m[1], 10) : 1;
+    ensureRecoveredPlayer(state, BOT_PLAYER_IDS[num - 1] || BOT_PLAYER_ID);
     return;
   }
 
@@ -716,21 +725,24 @@ function applyRecoveredMessage(state, content, timestamp) {
   }
 
   // Pick-type messages — 4 variants, all end in "picked **Team Name (FRC ####)**"
-  const pickMatch =
-    content.match(/^🤖 \*\*CPU\*\* picked \*\*(.+?)\*\*/) ||
-    content.match(/^⚡ (.+?) skipped and picked \*\*(.+?)\*\*/) ||
-    content.match(/^⏱️ \*\*Time's up!\*\* (.+?) was auto-skipped → picked \*\*(.+?)\*\*/) ||
-    content.match(/^✅ (.+?) picked \*\*(.+?)\*\*/);
+  let cpuMatch, skipMatch, timeoutMatch, normalMatch;
+  let player, teamText;
+  if ((cpuMatch = content.match(/^🤖 \*\*CPU(?: (\d+))?\*\* picked \*\*(.+?)\*\*/))) {
+    const num = cpuMatch[1] ? parseInt(cpuMatch[1], 10) : 1;
+    player = BOT_PLAYER_IDS[num - 1] || BOT_PLAYER_ID;
+    teamText = cpuMatch[2];
+  } else if ((skipMatch = content.match(/^⚡ (.+?) skipped and picked \*\*(.+?)\*\*/))) {
+    player = resolvePlayerIdentityFromText(skipMatch[1]);
+    teamText = skipMatch[2];
+  } else if ((timeoutMatch = content.match(/^⏱️ \*\*Time's up!\*\* (.+?) was auto-skipped → picked \*\*(.+?)\*\*/))) {
+    player = resolvePlayerIdentityFromText(timeoutMatch[1]);
+    teamText = timeoutMatch[2];
+  } else if ((normalMatch = content.match(/^✅ (.+?) picked \*\*(.+?)\*\*/))) {
+    player = resolvePlayerIdentityFromText(normalMatch[1]);
+    teamText = normalMatch[2];
+  }
 
-  if (pickMatch) {
-    let player, teamText;
-    if (pickMatch.length === 2) { // CPU variant has no leading identity group
-      player = BOT_PLAYER_ID;
-      teamText = pickMatch[1];
-    } else {
-      player = resolvePlayerIdentityFromText(pickMatch[1]);
-      teamText = pickMatch[2];
-    }
+  if (player && teamText) {
     const team = extractTeamNumber(teamText);
     if (player && team != null) {
       ensureRecoveredPlayer(state, player);
@@ -997,7 +1009,7 @@ async function firePickTimerWarning(guildId, channelId, mainMinutes) {
       data.phase === 'finished' || data.phase === 'worlds_finished') return;
 
   const current = getCurrentPlayer(data);
-  if (current === BOT_PLAYER_ID) return; // bot never needs auto-skipping
+  if (isBotPlayer(current)) return; // bots never need auto-skipping
 
   const ch = await client.channels.fetch(channelId).catch(() => null);
   const graceMinutes = graceMinutesFor(mainMinutes);
@@ -1025,7 +1037,7 @@ async function performAutoSkip(guildId, channelId) {
       data.phase === 'finished' || data.phase === 'worlds_finished') return;
 
   const current = getCurrentPlayer(data);
-  if (current === BOT_PLAYER_ID) return; // bot never needs auto-skipping
+  if (isBotPlayer(current)) return; // bots never need auto-skipping
 
   const pool = data.phase === 'worlds' ? data.worldsTeams : data.seasonTeams;
   const drafted = new Set(Object.values(data.teamsDrafted).flat());
@@ -1062,7 +1074,7 @@ async function performAutoSkip(guildId, channelId) {
   const next = getCurrentPlayer(data);
   await ch.send(`⏱️ **Grace period expired.** ${playerDisplay(current)} was auto-picked → **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
 
-  if (next === BOT_PLAYER_ID) {
+  if (isBotPlayer(next)) {
     clearPickTimer(guildId);
     await doBotPick(data, channelId, ch, guildId);
   } else {
@@ -1089,7 +1101,8 @@ function findOwner(data, team) {
 // Called recursively until a human's turn or draft ends
 async function doBotPick(data, channelId, channel, guildId) {
   if (data.phase === "finished" || data.phase === "worlds_finished") return;
-  if (getCurrentPlayer(data) !== BOT_PLAYER_ID) return;
+  const current = getCurrentPlayer(data);
+  if (!isBotPlayer(current)) return;
 
   const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
   const drafted = new Set(Object.values(data.teamsDrafted).flat());
@@ -1101,10 +1114,10 @@ async function doBotPick(data, channelId, channel, guildId) {
     ? t => getTeamWorldsScore(t, year)
     : t => getTeamHistoricalSeasonScore(t, year);
   const scored = await Promise.all(available.map(async t => ({ team: t, score: await scoreFn(t) })));
-  const team = (await pickWithRandomness(scored, 10, 0.9, 'CPU pick')).team;
-  data.teamsDrafted[BOT_PLAYER_ID].push(team);
+  const team = (await pickWithRandomness(scored, 10, 0.9, `CPU ${botNumber(current)} pick`)).team;
+  data.teamsDrafted[current].push(team);
   data.currentPick++;
-  data.pickLog.push({ player: BOT_PLAYER_ID, team, pickIndex: data.currentPick - 1 });
+  data.pickLog.push({ player: current, team, pickIndex: data.currentPick - 1 });
 
   const name = await getTeamName(team);
   const maxPicks = data.players.length * 6;
@@ -1114,17 +1127,17 @@ async function doBotPick(data, channelId, channel, guildId) {
     if (data.phase === 'worlds_finished') data.worldsFinishedAt = Date.now();
     saveData(data, channelId);
     clearPickTimer(guildId);
-    await channel.send(`🤖 **CPU** picked **${name}**\n\n🏁 **Draft complete!** Run \`/standings\` to see the results!`);
+    await channel.send(`${playerDisplay(current)} picked **${name}**\n\n🏁 **Draft complete!** Run \`/standings\` to see the results!`);
     if (data.phase === "finished" && guildId) postRosterAnnouncement(data, guildId).catch(() => {});
     return;
   }
 
   saveData(data, channelId);
   const next = getCurrentPlayer(data);
-  await channel.send(`🤖 **CPU** picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
+  await channel.send(`${playerDisplay(current)} picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
 
-  // If it's still the bot's turn (consecutive picks in snake), keep going
-  if (next === BOT_PLAYER_ID) {
+  // If it's still a bot's turn (consecutive picks in snake, or another bot immediately follows), keep going
+  if (isBotPlayer(next)) {
     await new Promise(r => setTimeout(r, 1500)); // small delay so it doesn't feel instant
     await doBotPick(data, channelId, channel, guildId);
   } else {
@@ -1286,7 +1299,7 @@ const HELP_CATEGORIES = [
     label: 'Draft Setup',
     lines: [
       '`/join_draft` — Join the fantasy draft',
-      '`/addbot` — Add a CPU auto-picker',
+      '`/addbot` — Add a CPU auto-picker (up to 3)',
       '`/addmanualplayer [name]` — Add a non-Discord player *(admin)*',
       '`/draftstatus [open]` — Open or close the draft *(admin)*',
       '`/setchannel` — Set this channel as the draft channel *(admin)*',
@@ -1514,10 +1527,12 @@ client.on('interactionCreate', async (interaction) => {
     // ── ADD BOT PLAYER ────────────────────────────────────────────
     if (interaction.commandName === 'addbot') {
       if (!data.draftOpen) return interaction.reply("❌ Draft joining is currently closed.");
-      if (data.players.includes(BOT_PLAYER_ID)) return interaction.reply("🤖 CPU is already in the draft.");
-      data.players.push(BOT_PLAYER_ID);
+      const currentBots = data.players.filter(isBotPlayer);
+      if (currentBots.length >= MAX_BOTS) return interaction.reply(`🤖 Maximum of ${MAX_BOTS} CPU players are already in the draft.`);
+      const nextBotId = BOT_PLAYER_IDS.find(id => !data.players.includes(id));
+      data.players.push(nextBotId);
       saveData(data, channelId);
-      return interaction.reply("🤖 **CPU player added to the draft!** It will auto-pick randomly when it's its turn.");
+      return interaction.reply(`🤖 **CPU ${botNumber(nextBotId)} added to the draft!** It will auto-pick randomly when it's its turn. (${currentBots.length + 1}/${MAX_BOTS} CPU players)`);
     }
 
     // ── START SEASON DRAFT ────────────────────────────────────────
@@ -1541,7 +1556,7 @@ client.on('interactionCreate', async (interaction) => {
       );
 
       // If CPU goes first, auto-pick immediately
-      if (first === BOT_PLAYER_ID) {
+      if (isBotPlayer(first)) {
         await doBotPick(data, channelId, interaction.channel, guildId);
       }
       return;
@@ -1576,7 +1591,7 @@ client.on('interactionCreate', async (interaction) => {
         `🌍 **Worlds Draft Started!**\n\n**Final Season Standings:**\n${standingsText}\n\n**Draft Order** (worst → best):\n${data.draftOrder.map(playerDisplay).join(' → ')}\n\nFirst pick: ${playerDisplay(data.draftOrder[0])}`
       );
 
-      if (getCurrentPlayer(data) === BOT_PLAYER_ID) {
+      if (isBotPlayer(getCurrentPlayer(data))) {
         await doBotPick(data, channelId, interaction.channel, guildId);
       }
       return;
@@ -1617,7 +1632,7 @@ client.on('interactionCreate', async (interaction) => {
       const next = getCurrentPlayer(data);
       await interaction.editReply(`✅ ${actor} picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
 
-      if (next === BOT_PLAYER_ID) {
+      if (isBotPlayer(next)) {
         clearPickTimer(guildId);
         await doBotPick(data, channelId, interaction.channel, guildId);
       } else {
@@ -1662,7 +1677,7 @@ client.on('interactionCreate', async (interaction) => {
       const next = getCurrentPlayer(data);
       await interaction.editReply(`✅ ${playerDisplay(current)} picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
 
-      if (next === BOT_PLAYER_ID) {
+      if (isBotPlayer(next)) {
         clearPickTimer(guildId);
         await doBotPick(data, channelId, interaction.channel, guildId);
       } else {
@@ -1685,7 +1700,7 @@ client.on('interactionCreate', async (interaction) => {
       const theirOwner = findOwner(data, wanting);
       if (!theirOwner) return interaction.reply({ content: `❌ FRC ${wanting} hasn't been drafted yet.`, ephemeral: true });
       if (theirOwner === userId) return interaction.reply({ content: "❌ You already own that team.", ephemeral: true });
-      if (theirOwner === BOT_PLAYER_ID) return interaction.reply({ content: "❌ You can't trade with the CPU.", ephemeral: true });
+      if (isBotPlayer(theirOwner)) return interaction.reply({ content: "❌ You can't trade with a CPU player.", ephemeral: true });
       if (data.pendingTrade) return interaction.reply({ content: "❌ There's already a pending trade. It must be accepted, declined, or cancelled first.", ephemeral: true });
 
       // Trade lock: an admin override always wins; otherwise the default rules apply —
@@ -1849,7 +1864,7 @@ client.on('interactionCreate', async (interaction) => {
       const next = getCurrentPlayer(data);
       await interaction.editReply(`⚡ ${playerDisplay(current)} skipped and picked **${name}**\n\n👉 Next pick: ${playerDisplay(next)}`);
 
-      if (next === BOT_PLAYER_ID) {
+      if (isBotPlayer(next)) {
         clearPickTimer(guildId);
         await doBotPick(data, channelId, interaction.channel, guildId);
       } else {
@@ -2032,7 +2047,7 @@ client.on('interactionCreate', async (interaction) => {
           playerName(entry.player),
           entry.team,
           pickNames[i],
-          entry.player === BOT_PLAYER_ID ? 'Yes' : 'No'
+          isBotPlayer(entry.player) ? 'Yes' : 'No'
         ]);
       }
       const csvPicks = pickRows
@@ -2295,7 +2310,7 @@ client.on('interactionCreate', async (interaction) => {
         const lines = await Promise.all(draftedHere.map(async teamNum => {
           const name = await getTeamName(teamNum);
           const owner = findOwner(data, teamNum);
-          const ownerLabel = owner === BOT_PLAYER_ID ? '🤖 CPU'
+          const ownerLabel = isBotPlayer(owner) ? `🤖 CPU ${botNumber(owner)}`
             : owner?.startsWith('MANUAL_') ? `👤 ${owner.replace('MANUAL_', '')}`
             : owner ? `<@${owner}>` : '—';
           return `• FRC ${teamNum} — ${name.split(' (')[0]} (${ownerLabel})`;
@@ -2406,4 +2421,14 @@ module.exports = {
   loadSeasonTeams,
   getTeamName,
   DEFAULT_YEAR,
+  BOT_PLAYER_ID,
+  BOT_PLAYER_IDS,
+  MAX_BOTS,
+  isBotPlayer,
+  botNumber,
+  playerDisplay,
+  resolvePlayerIdentityFromText,
+  ensureRecoveredPlayer,
+  applyRecoveredMessage,
+  freshData,
 };
