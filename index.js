@@ -1878,7 +1878,7 @@ client.on('interactionCreate', async (interaction) => {
       }
       if (setToOpen) {
         data.draftOpen = true;
-        data.draftId = generateDraftId();
+        data.draftId = data.draftId || generateDraftId();
         saveData(data, channelId);
         return interaction.reply(`✅ **Draft is now OPEN** · ID: **${data.draftId}**\nPlayers can now join using \`/draft join\` or add a CPU with \`/draft addbot\``);
       } else {
