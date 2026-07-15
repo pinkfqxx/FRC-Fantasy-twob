@@ -1343,13 +1343,18 @@ async function evaluateBotTrade(botId, offeringTeam, wantingTeam, year, phase) {
   const delta = offeringScore - wantingScore;            // positive = bot gains
   const ref   = Math.max(wantingScore, 1);               // avoid div/0
 
+  // A 30% score difference relative to the giving team is treated as a "full swing" —
+  // so the modifier reaches its cap (+30% or -20%) when the received team scores
+  // ~30% more or less than the one being given up. This is calibrated to the realistic
+  // spread between teams in the same draft pool (100% differences never occur in practice).
+  const FULL_SWING = 0.30;
+  const relativeChange = delta / ref;
+
   let modifier;
   if (delta >= 0) {
-    // Improvement: scale 0 → +30% as delta goes from 0 → ref (100% gain)
-    modifier = Math.min(delta / ref, 1) * 0.30;
+    modifier = Math.min(relativeChange / FULL_SWING, 1) * 0.30;
   } else {
-    // Degradation: scale 0 → -20% as delta goes from 0 → -ref (100% loss)
-    modifier = Math.max(delta / ref, -1) * 0.20;
+    modifier = Math.max(relativeChange / FULL_SWING, -1) * 0.20;
   }
 
   const finalChance = Math.max(0, Math.min(1, BASE_CHANCE + modifier));
