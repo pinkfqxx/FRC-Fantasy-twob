@@ -243,6 +243,21 @@ function isAdmin(data, userId) {
   return data.admins.includes(userId);
 }
 
+// Returns true if the Discord member has server-level authority: either the
+// guild owner or a member with the Administrator permission. These users
+// automatically receive draft admin privileges regardless of the bot's own
+// admin list — use isEffectiveAdmin() for all in-draft permission checks.
+function isDiscordAdmin(interaction) {
+  return interaction.guild?.ownerId === interaction.user.id ||
+         interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+}
+
+// Combined admin check: true if the user is in the bot's own admin list OR has
+// Discord-level authority (Administrator permission or server ownership).
+function isEffectiveAdmin(data, interaction) {
+  return isAdmin(data, interaction.user.id) || isDiscordAdmin(interaction);
+}
+
 // ---------------- SCORING ----------------
 // Returns a team's fantasy score for the regular season: sum of district points from
 // their first 2 qualifying events (type 0=Regional, 1=District). If only 1 event was
@@ -1499,8 +1514,8 @@ client.on('interactionCreate', async (interaction) => {
 
     // Re-verify permission on the button click — the ephemeral message is only
     // visible to the invoker, but it's good practice to check again.
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-      return interaction.update({ content: '❌ You need **Manage Server** permission.', embeds: [], components: [] });
+    if (!isDiscordAdmin(interaction)) {
+      return interaction.update({ content: '❌ Only the server owner or a member with **Administrator** permission can do this.', embeds: [], components: [] });
     }
 
     await interaction.deferUpdate();
@@ -1650,8 +1665,8 @@ client.on('interactionCreate', async (interaction) => {
   // Placed before the draft-channel guard so it works even when the server is
   // misconfigured and the draft channel is unknown or inaccessible.
   if (interaction.commandName === 'nuke') {
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-      return interaction.reply({ content: '❌ You need **Manage Server** permission to run `/nuke`.', ephemeral: true });
+    if (!isDiscordAdmin(interaction)) {
+      return interaction.reply({ content: '❌ Only the server owner or a member with **Administrator** permission can run `/nuke`.', ephemeral: true });
     }
     if (interaction.options.getString('confirm') !== 'NUKE') {
       return interaction.reply({
@@ -1712,7 +1727,7 @@ client.on('interactionCreate', async (interaction) => {
     // ── DRAFT STATUS ──────────────────────────────────────────────
     if (interaction.commandName === 'draft' && interaction.options.getSubcommand() === 'status') {
       const setToOpen = interaction.options.getBoolean('open');
-      if (data.players.length > 0 && !isAdmin(data, userId)) {
+      if (data.players.length > 0 && !isEffectiveAdmin(data, interaction)) {
         return interaction.reply("❌ Only an admin can change draft status.");
       }
       if (setToOpen) {
@@ -1737,14 +1752,19 @@ client.on('interactionCreate', async (interaction) => {
       if (!data.draftOpen) return interaction.reply("❌ Draft joining is currently closed.\nAsk the host to run `/draft status open:true`");
       if (data.players.includes(userId)) return interaction.reply("You are already in the draft.");
       data.players.push(userId);
-      if (!data.admins.length) data.admins.push(userId);
+      // First player always becomes admin. Discord-level admins (server owner or
+      // Administrator permission) are also auto-promoted so they always have draft
+      // admin powers regardless of join order.
+      if (!data.admins.length || isDiscordAdmin(interaction)) {
+        if (!data.admins.includes(userId)) data.admins.push(userId);
+      }
       saveData(data, channelId);
       return interaction.reply(`✅ <@${userId}> has joined the draft!`);
     }
 
     // ── ADD ADMIN ────────────────────────────────────────────────
     if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'addadmin') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can promote others.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can promote others.", ephemeral: true });
       const target = interaction.options.getUser('user');
       if (data.admins.includes(target.id)) return interaction.reply({ content: `${target} is already an admin.`, ephemeral: true });
       data.admins.push(target.id);
@@ -1754,7 +1774,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── ADD MANUAL PLAYER ───────────────────────────────────────────────
     if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'addmanualplayer') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can add manual players.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can add manual players.", ephemeral: true });
       if (!data.draftOpen) return interaction.reply({ content: "❌ Draft joining is currently closed.", ephemeral: true });
       const rawName = interaction.options.getString('name').trim();
       const mId = `MANUAL_${rawName}`;
@@ -1792,7 +1812,7 @@ client.on('interactionCreate', async (interaction) => {
       const mode = interaction.options.getString('mode');
       await interaction.deferReply();
       if (!data.players.length) return interaction.editReply("❌ No players have joined yet.");
-      if (!isAdmin(data, userId)) return interaction.editReply("❌ Only an admin can start the draft.");
+      if (!isEffectiveAdmin(data, interaction)) return interaction.editReply("❌ Only an admin can start the draft.");
 
       if (mode === 'worlds') {
         await interaction.editReply("⏳ Calculating final season standings from TBA…");
@@ -1850,7 +1870,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'team') {
       const team = interaction.options.getInteger('team');
       const forUser = interaction.options.getUser('for');
-      const actingAdmin = forUser && isAdmin(data, userId);
+      const actingAdmin = forUser && isEffectiveAdmin(data, interaction);
       const pickerId = actingAdmin ? forUser.id : userId;
       const current = getCurrentPlayer(data);
 
@@ -1892,7 +1912,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── MANUAL PICK ────────────────────────────────────────────────────────
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'manual') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can pick for manual players.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can pick for manual players.", ephemeral: true });
       const rawName = interaction.options.getString('player').trim();
       const mId = `MANUAL_${rawName}`;
       const current = getCurrentPlayer(data);
@@ -1990,7 +2010,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── TRADE LOCK OVERRIDE ─────────────────────────────────────────
     if (interaction.commandName === 'trade' && interaction.options.getSubcommand() === 'lock') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can change the trade lock.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can change the trade lock.", ephemeral: true });
       const mode = interaction.options.getString('mode');
       guildConfig.tradeLockOverride = mode === 'locked' ? true : mode === 'open' ? false : null;
       saveGuildConfig(guildConfig, guildId);
@@ -2072,7 +2092,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'season' && interaction.options.getSubcommand() === 'set') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can set the year.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can set the year.", ephemeral: true });
       const y = interaction.options.getInteger('year');
       data.year = y;
       seasonTeamsCache = null;
@@ -2083,7 +2103,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'skip') {
       const current = getCurrentPlayer(data);
-      if (userId !== current && !isAdmin(data, userId)) return interaction.reply({ content: "⛔ It's not your turn (or you are not an admin).", ephemeral: true });
+      if (userId !== current && !isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "⛔ It's not your turn (or you are not an admin).", ephemeral: true });
       const pool = data.phase === "worlds" ? data.worldsTeams : data.seasonTeams;
       const drafted = new Set(Object.values(data.teamsDrafted).flat());
       const available = pool.filter(t => !drafted.has(t));
@@ -2216,7 +2236,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── UNDRAFT ─────────────────────────────────────────────────
     if (interaction.commandName === 'pick' && interaction.options.getSubcommand() === 'undo') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only an admin can undraft.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only an admin can undraft.", ephemeral: true });
       if (!data.pickLog?.length) return interaction.reply({ content: "❌ No picks have been made yet.", ephemeral: true });
 
       const targetTeam = interaction.options.getInteger('team');
@@ -2430,7 +2450,7 @@ client.on('interactionCreate', async (interaction) => {
     // ── RESET DRAFT ───────────────────────────────────────────────
     if (interaction.commandName === 'draft' && interaction.options.getSubcommand() === 'reset') {
       if (interaction.options.getString('confirm') !== "RESET") return interaction.reply("Type `RESET` to confirm.");
-      if (!isAdmin(data, userId)) return interaction.reply("❌ Only an admin can reset.");
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply("❌ Only an admin can reset.");
       clearPickTimer(guildId);
       saveData(freshData(), channelId);
       return interaction.reply("🧹 Draft fully reset.");
@@ -2482,7 +2502,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── SET PICK TIMER ────────────────────────────────────────────
     if (interaction.commandName === 'draft' && interaction.options.getSubcommand() === 'timer') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can set the pick timer.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can set the pick timer.", ephemeral: true });
       const minutes = interaction.options.getInteger('minutes');
       guildConfig.pickTimerMinutes = minutes;
       saveGuildConfig(guildConfig, guildId);
@@ -2686,7 +2706,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── ANNOUNCE ──────────────────────────────────────────────────
     if (interaction.commandName === 'admin' && interaction.options.getSubcommand() === 'announce') {
-      if (!isAdmin(data, userId)) return interaction.reply({ content: "❌ Only admins can post announcements.", ephemeral: true });
+      if (!isEffectiveAdmin(data, interaction)) return interaction.reply({ content: "❌ Only admins can post announcements.", ephemeral: true });
       const message = interaction.options.getString('message');
       if (!guildConfig.announcementChannelId) return interaction.reply({ content: "❌ No announcements channel is configured. Re-invite the bot or check that `#frc-fantasy-updates` exists.", ephemeral: true });
       const annChannel = await client.channels.fetch(guildConfig.announcementChannelId).catch(() => null);
